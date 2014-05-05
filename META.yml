@@ -1,14 +1,14 @@
 ---
-abstract: 'transforms TeX and LaTeX into XML'
+abstract: 'transforms TeX and LaTeX into XML/HTML/MathML'
 author:
   - 'Bruce Miller <bruce.miller@nist.gov>'
 build_requires:
   ExtUtils::MakeMaker: 0
 configure_requires:
-  ExtUtils::MakeMaker: 0
+  version: 0.77
 dynamic_config: 1
 generated_by: 'ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.112621'
-license: unknown
+license: open_source
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
   version: 1.4
@@ -27,7 +27,10 @@ requires:
   JSON::XS: 0
   LWP: 0
   Parse::RecDescent: 0
+  Pod::Parser: 0
+  Test::More: 0
   URI: 0
   XML::LibXML: 1.61
   XML::LibXSLT: 1.58
-version: v0.7.999_04
+  perl: 5.008001
+version: v0.8.0

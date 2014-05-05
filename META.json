@@ -1,12 +1,12 @@
 {
-   "abstract" : "transforms TeX and LaTeX into XML",
+   "abstract" : "transforms TeX and LaTeX into XML/HTML/MathML",
    "author" : [
       "Bruce Miller <bruce.miller@nist.gov>"
    ],
    "dynamic_config" : 1,
    "generated_by" : "ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.112621",
    "license" : [
-      "unknown"
+      "open_source"
    ],
    "meta-spec" : {
       "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
@@ -27,7 +27,7 @@
       },
       "configure" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : 0
+            "version" : "0.77"
          }
       },
       "runtime" : {
@@ -41,12 +41,15 @@
             "JSON::XS" : 0,
             "LWP" : 0,
             "Parse::RecDescent" : 0,
+            "Pod::Parser" : 0,
+            "Test::More" : 0,
             "URI" : 0,
             "XML::LibXML" : "1.61",
-            "XML::LibXSLT" : "1.58"
+            "XML::LibXSLT" : "1.58",
+            "perl" : "5.008001"
          }
       }
    },
-   "release_status" : "testing",
-   "version" : "v0.7.999_04"
+   "release_status" : "stable",
+   "version" : "v0.8.0"
 }
