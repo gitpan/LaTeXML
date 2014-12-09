@@ -15,7 +15,8 @@ use warnings;
 use Carp;
 use Encode;
 use Data::Dumper;
-use File::Temp qw(tempdir);
+use File::Temp;
+File::Temp->safe_level(File::Temp::HIGH);
 use File::Path qw(rmtree);
 use File::Spec;
 use LaTeXML::Common::Config;
@@ -25,12 +26,20 @@ use LaTeXML::Util::Pathname;
 use LaTeXML::Util::WWW;
 use LaTeXML::Util::ObjectDB;
 use LaTeXML::Post::Scan;
-# Contrived!!! See LaTeXML::Version
-$LaTeXML::VERSION = do { use LaTeXML::Version; $LaTeXML::Version::VERSION; };
+use vars qw($VERSION);
+# This is the main version of LaTeXML being claimed.
+use version; our $VERSION = version->declare("0.8.0_01");
+use LaTeXML::Version;
+# Derived, more informative version numbers
+our $FULLVERSION = "LaTeXML version $LaTeXML::VERSION"
+  . ($LaTeXML::Version::REVISION ? "; revision $LaTeXML::Version::REVISION" : '');
+# Handy identifier string for any executable.
+our $IDENTITY = "$FindBin::Script ($LaTeXML::FULLVERSION)";
+
 our $LOG_STACK = 0;
 
 #**********************************************************************
-#our @IGNORABLE = qw(timeout profile port preamble postamble port destination log removed_math_formats whatsin whatsout math_formats input_limit input_counter dographics mathimages mathimagemag );
+#our @IGNORABLE = qw(timeout profile port preamble postamble port destination log removed_math_formats whatsin whatsout math_formats input_limit input_counter dographics mathimagemag );
 
 # Switching to white-listing options that are important for new_latexml:
 our @COMPARABLE = qw(preload paths verbosity strict comments inputencoding includestyles documentid mathparse);
@@ -135,8 +144,10 @@ sub convert {
   my $opts    = $$self{opts};
   my $runtime = $$self{runtime};
   ($$runtime{status}, $$runtime{status_code}) = (undef, undef);
-  print STDERR "\n$LaTeXML::IDENTITY\n" if $$opts{verbosity} >= 0;
-  print STDERR "processing started " . localtime() . "\n" if $$opts{verbosity} >= 0;
+  if ($$opts{verbosity} >= 0) {
+    print STDERR "$LaTeXML::IDENTITY\n";
+    print STDERR "invoked as [$0 " . join(' ', @ARGV) . "]\n" if $$opts{verbosity} >= 1;
+    print STDERR "processing started " . localtime() . "\n"; }
 
   # 1.3 Prepare for What's IN:
   # We use a new temporary variable to avoid confusion with daemon caching
@@ -153,7 +164,7 @@ sub convert {
   elsif ($$opts{whatsin} =~ /^archive/) {
     # Sandbox the input
     $$opts{archive_sourcedirectory} = $$opts{sourcedirectory};
-    my $sandbox_directory = tempdir();
+    my $sandbox_directory = File::Temp->newdir(TMPDIR => 1);
     $$opts{sourcedirectory} = $sandbox_directory;
     # Extract the archive in the sandbox
     $source = unpack_source($source, $sandbox_directory);
@@ -171,9 +182,9 @@ sub convert {
   if ($$opts{whatsout} =~ /^archive/) {
     $$opts{archive_sitedirectory} = $$opts{sitedirectory};
     $$opts{archive_destination}   = $$opts{destination};
-    my $destination_name  = $$opts{destination} ? pathname_name($$opts{destination}) : 'document';
-    my $sandbox_directory = tempdir();
-    my $extension         = $$opts{format};
+    my $destination_name = $$opts{destination} ? pathname_name($$opts{destination}) : 'document';
+    my $sandbox_directory = File::Temp->newdir(TMPDIR => 1);
+    my $extension = $$opts{format};
     $extension =~ s/\d+$//;
     $extension =~ s/^epub|mobi$/xhtml/;
     my $sandbox_destination = "$destination_name.$extension";
@@ -267,7 +278,7 @@ sub convert {
 
   # 3 If desired, post-process
   my $result = $dom;
-  if ($$opts{post} && $dom) {
+  if ($$opts{post} && $dom && $dom->documentElement) {
     my $post_eval_return = eval {
       local $SIG{'ALRM'} = sub { die "alarm\n" };
       alarm($$opts{timeout});
@@ -436,6 +447,15 @@ sub convert_post {
               (defined $$opts{plane1} ? (plane1 => $$opts{plane1}) : (plane1 => 1)),
               ($$opts{hackplane1} ? (hackplane1 => 1) : ()),
               %PostOPS)); }
+        elsif ($fmt eq 'images') {
+          require LaTeXML::Post::MathImages;
+          push(@mprocs, LaTeXML::Post::MathImages->new(magnification => $$opts{mathimagemag},
+              %PostOPS)); }
+        elsif ($fmt eq 'svg') {
+          require LaTeXML::Post::MathImages;
+          push(@mprocs, LaTeXML::Post::MathImages->new(magnification => $$opts{mathimagemag},
+              imagetype => 'svg',
+              %PostOPS)); }
       }
       ###    $keepXMath  = 0 unless defined $keepXMath;
       ### OR is $parallelmath ALWAYS on whenever there's more than one math processor?
@@ -445,10 +465,6 @@ sub convert_post {
         push(@procs, $main); }
       else {
         push(@procs, @mprocs); }
-    }
-    if ($$opts{mathimages}) {
-      require LaTeXML::Post::MathImages;
-      push(@procs, LaTeXML::Post::MathImages->new(magnification => $$opts{mathimagemag}, %PostOPS));
     }
     if ($xslt) {
       require LaTeXML::Post::XSLT;
@@ -509,7 +525,8 @@ sub convert_post {
       }
 
       push(@procs, LaTeXML::Post::XSLT->new(stylesheet => $xslt,
-          parameters => $parameters,
+          parameters  => $parameters,
+          searchpaths => [@searchpaths],
           noresources => (defined $$opts{defaultresources}) && !$$opts{defaultresources},
           %PostOPS));
     }
@@ -607,7 +624,7 @@ sub new_latexml {
 
   # TODO: Do again, need to do this in a GOOD way as well:
   $latexml->digestFile($_, noinitialize => 1) foreach (@str_pre);
-
+  print STDERR "\n\n";    # Flush a pair of newlines to delimit the initalization
   return $latexml;
 }
 

@@ -22,7 +22,10 @@ use base qw(LaTeXML::Common::Object);
 
 # Factory method;
 # Create an appropriate Mouth
-# options are quiet, atletter, content
+# options are
+#  quiet,
+#  atletter,
+#  content
 sub create {
   my ($class, $source, %options) = @_;
   if ($options{content}) {    # we've cached the content of this source
@@ -128,8 +131,8 @@ sub getNextChar {
   my ($self) = @_;
   if ($$self{colno} < $$self{nchars}) {
     my $ch = $$self{chars}[$$self{colno}++];
-    my $cc = $$STATE{table}{catcode}{$ch}[0];    # $STATE->lookupCatcode($ch); OPEN CODED!
-    if ((defined $cc) && ($cc == CC_SUPER)       # Possible convert ^^x
+    my $cc = $$STATE{catcode}{$ch}[0];         # $STATE->lookupCatcode($ch); OPEN CODED!
+    if ((defined $cc) && ($cc == CC_SUPER)     # Possible convert ^^x
       && ($$self{colno} + 1 < $$self{nchars}) && ($ch eq $$self{chars}[$$self{colno}])) {
       my ($c1, $c2);
       if (($$self{colno} + 2 < $$self{nchars})    # ^^ followed by TWO LOWERCASE Hex digits???
@@ -195,10 +198,15 @@ sub handle_escape {    # Read control sequence
     while ((($ch, $cc) = $self->getNextChar) && $ch && ($cc == CC_LETTER)) {
       $cs .= $ch; }
     $$self{colno}--; }
-  if (($cc == CC_SPACE) || ($cc == CC_EOL)) {    # We'll skip whitespace here.
-                                                 # Now, skip spaces
-    while ((($ch, $cc) = $self->getNextChar) && $ch && (($cc == CC_SPACE) || ($cc == CC_EOL))) { }
+  if ($cc == CC_SPACE) {     # We'll skip whitespace here.
+    while ((($ch, $cc) = $self->getNextChar) && $ch && ($cc == CC_SPACE)) { }
     $$self{colno}-- if ($$self{colno} < $$self{nchars}); }
+  if ($cc == CC_EOL) {       # If we've got an EOL
+                             # if in \read mode, leave the EOL to be turned into a T_SPACE
+    if (($STATE->lookupValue('PRESERVE_NEWLINES') || 0) > 1) { }
+    else {                   # else skip it.
+      $self->getNextChar;
+      $$self{colno}-- if ($$self{colno} < $$self{nchars}); } }
   return T_CS($cs); }
 
 sub handle_EOL {
@@ -277,7 +285,8 @@ sub readToken {
       $$self{chars}  = [splitChars($line)];
       $$self{nchars} = scalar(@{ $$self{chars} });
       while (($$self{colno} < $$self{nchars})
-        && (($$STATE{table}{catcode}{ $$self{chars}[$$self{colno}] }[0] || CC_OTHER) == CC_SPACE)) {
+        # DIRECT ACCESS to $STATE's catcode table!!!
+        && (($$STATE{catcode}{ $$self{chars}[$$self{colno}] }[0] || CC_OTHER) == CC_SPACE)) {
         $$self{colno}++; }
 
       # Sneak a comment out, every so often.
@@ -309,13 +318,18 @@ sub readTokens {
 #**********************************************************************
 # Read a raw lines; there are so many variants of how it should end,
 # that the Mouth API is left as simple as possible.
+# Alas: $noread true means NOT to read a new line, but only return
+# the remainder of the current line, if any. This is useful when combining
+# with previously peeked tokens from the Gullet.
 sub readRawLine {
-  my ($self) = @_;
+  my ($self, $noread) = @_;
   my $line;
   if ($$self{colno} < $$self{nchars}) {
     $line = join('', @{ $$self{chars} }[$$self{colno} .. $$self{nchars} - 1]);
     # End lines with \n, not CR, since the result will be treated as strings
     $$self{colno} = $$self{nchars}; }
+  elsif ($noread) {
+    $line = ''; }
   else {
     $line = $self->getNextLine;
     if (!defined $line) {

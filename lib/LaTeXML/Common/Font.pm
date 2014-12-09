@@ -20,16 +20,22 @@ use LaTeXML::Common::Dimension;
 use List::Util qw(min max sum);
 use base qw(LaTeXML::Common::Object);
 
+# Note that this has evolved way beynond just "font",
+# but covers text properties (or even display properties) in general
+# including basic font information, color & background color
+# as well as encoding and language information.
+
 # NOTE: This is now in Common that it may evolve to be useful in Post processing...
 
 my $DEFFAMILY     = 'serif';      # [CONSTANT]
 my $DEFSERIES     = 'medium';     # [CONSTANT]
 my $DEFSHAPE      = 'upright';    # [CONSTANT]
-my $DEFSIZE       = 'normal';     # [CONSTANT]
 my $DEFCOLOR      = 'black';      # [CONSTANT]
 my $DEFBACKGROUND = 'white';      # [CONSTANT]
 my $DEFOPACITY    = '1';          # [CONSTANT]
 my $DEFENCODING   = 'OT1';        # [CONSTANT]
+
+sub DEFSIZE { return $STATE->lookupValue('NOMINAL_FONT_SIZE') || 10; }
 
 #======================================================================
 # Mappings from various forms of names or component names in TeX
@@ -114,28 +120,27 @@ sub lookupFontShape {
   my ($shapecode) = @_;
   return $font_shape{ ToString($shapecode) }; }
 
-# Decode a font size in points into a "logical" size.
-# associate a logical size with all pt sizes (/10) below the given number.
-my @font_size_map = (0.60 => 'tiny', 0.75 => 'script', 0.85 => 'footnote', 0.95 => 'small',
-  1.10 => 'normal', 1.30 => 'large', 1.55 => 'Large', 1.85 => 'LARGE',
-  2.25 => 'huge', 1000.0 => 'Huge');
-# abstract font size in pts.
+# Symbolic font sizes, relative to the NOMINAL_FONT_SIZE (often 10)
+# extended logical font sizes, based on nominal document size of 10pts
+# Possibly should simply use absolute font point sizes, as declared in class...
 my %font_size = (
-  tiny   => 5,  script => 7,  footnote => 8,  small => 9,
-  normal => 10, large  => 12, Large    => 14, LARGE => 17,
-  huge   => 20, Huge   => 25);
+  tiny   => 0.5, SMALL => 0.7, Small => 0.8,  small => 0.9,
+  normal => 1.0, large => 1.2, Large => 1.44, LARGE => 1.728,
+  huge => 2.074, Huge => 2.488,
+  big => 1.2, Big => 1.6, bigg => 2.1, Bigg => 2.6,
+);
 
-sub lookupFontSize {
+sub rationalizeFontSize {
   my ($size) = @_;
-  if (defined $size) {
-    my $scaled = $size / 10.0;     # ASSUMED nominal font 10pt!!! Set from doc!!!
-    my @map    = @font_size_map;
-    while (@map) {
-      return shift(@map) if ($scaled <= shift(@map));
-      shift(@map); }
-    return 'Huge'; }
-  else {
-    return 'normal'; } }
+  return unless defined $size;
+  if (my $symbolic = $font_size{$size}) {
+    return $symbolic * DEFSIZE(); }
+  return $size; }
+
+# convert to percent
+sub relativeFontSize {
+  my ($newsize, $oldsize) = @_;
+  return int(100 * $newsize / $oldsize) . '%'; }
 
 my $FONTREGEXP
   = '(' . join('|', sort { -($a cmp $b) } keys %font_family) . ')'
@@ -154,7 +159,7 @@ sub decodeFontname {
     $size = 1 unless defined $size;
     $size = $at if defined $at;
     $size *= $scaled if defined $scaled;
-    $props{size} = lookupFontSize($size);
+    $props{size} = $size;
     # Experimental Hack !?!?!?
     $props{encoding} = 'OT1' unless defined $props{encoding};
     return %props; }
@@ -186,12 +191,14 @@ sub new {
   my $bg         = $options{background};
   my $opacity    = $options{opacity};
   my $encoding   = $options{encoding};
+  my $language   = $options{language};
   my $forcebold  = $options{forcebold};
   my $forceshape = $options{forceshape};
   return $class->new_internal(
-    $family, $series, $shape, $size,
+    $family, $series, $shape, rationalizeFontSize($size),
     $color, $bg, $opacity,
-    $encoding, $forcebold, $forceshape); }
+    $encoding,  $language,
+    $forcebold, $forceshape); }
 
 sub new_internal {
   my ($class, @components) = @_;
@@ -199,13 +206,13 @@ sub new_internal {
 
 sub textDefault {
   my ($self) = @_;
-  return $self->new_internal($DEFFAMILY, $DEFSERIES, $DEFSHAPE, $DEFSIZE,
-    $DEFCOLOR, $DEFBACKGROUND, $DEFOPACITY, $DEFENCODING, undef, undef); }
+  return $self->new_internal($DEFFAMILY, $DEFSERIES, $DEFSHAPE, DEFSIZE(),
+    $DEFCOLOR, $DEFBACKGROUND, $DEFOPACITY, $DEFENCODING, undef, undef, undef); }
 
 sub mathDefault {
   my ($self) = @_;
-  return $self->new_internal('math', $DEFSERIES, 'italic', $DEFSIZE,
-    $DEFCOLOR, $DEFBACKGROUND, $DEFOPACITY, undef, undef, undef); }
+  return $self->new_internal('math', $DEFSERIES, 'italic', DEFSIZE(),
+    $DEFCOLOR, $DEFBACKGROUND, $DEFOPACITY, undef, undef, undef, undef); }
 
 # Accessors
 sub getFamily     { my ($self) = @_; return $$self[0]; }
@@ -216,6 +223,7 @@ sub getColor      { my ($self) = @_; return $$self[4]; }
 sub getBackground { my ($self) = @_; return $$self[5]; }
 sub getOpacity    { my ($self) = @_; return $$self[6]; }
 sub getEncoding   { my ($self) = @_; return $$self[7]; }
+sub getLanguage   { my ($self) = @_; return $$self[8]; }
 
 sub toString {
   my ($self) = @_;
@@ -224,13 +232,13 @@ sub toString {
 # Perhaps it is more useful to list only the non-default components?
 sub stringify {
   my ($self) = @_;
-  my ($fam, $ser, $shp, $siz, $col, $bkg, $opa, $enc) = @$self;
+  my ($fam, $ser, $shp, $siz, $col, $bkg, $opa, $enc, $lang) = @$self;
   $fam = 'serif' if $fam && ($fam eq 'math');
   return 'Font[' . join(',', grep { $_ }
       (isDiff($fam, $DEFFAMILY) ? ($fam) : ()),
     (isDiff($ser, $DEFSERIES)     ? ($ser) : ()),
     (isDiff($shp, $DEFSHAPE)      ? ($shp) : ()),
-    (isDiff($siz, $DEFSIZE)       ? ($siz) : ()),
+    (isDiff($siz, DEFSIZE())      ? ($siz) : ()),
     (isDiff($col, $DEFCOLOR)      ? ($col) : ()),
     (isDiff($bkg, $DEFBACKGROUND) ? ($bkg) : ()),
     (isDiff($opa, $DEFOPACITY)    ? ($opa) : ())) . ']'; }
@@ -256,25 +264,29 @@ sub match {
 
 sub makeConcrete {
   my ($self, $concrete) = @_;
-  my ($family,  $series,  $shape,  $size,  $color,  $bg,  $opacity,  $encoding)  = @$self;
-  my ($ofamily, $oseries, $oshape, $osize, $ocolor, $obg, $oopacity, $oencoding) = @$concrete;
+  my ($family,  $series,  $shape,  $size,  $color,  $bg,  $opacity,  $encoding,  $lang)  = @$self;
+  my ($ofamily, $oseries, $oshape, $osize, $ocolor, $obg, $oopacity, $oencoding, $olang) = @$concrete;
   return (ref $self)->new_internal(
     $family || $ofamily, $series || $oseries, $shape || $oshape, $size || $osize,
     $color || $ocolor, $bg || $obg, (defined $opacity ? $opacity : $oopacity),
-    $encoding || $oencoding); }
+    $encoding || $oencoding, $lang || $olang); }
 
 sub isDiff {
   my ($x, $y) = @_;
   return (defined $x) && (!(defined $y) || ($x ne $y)); }
 
-# Return a hash of the differences in font, size and color
-# [does encoding play a role here?]
-# Note that this returns a hash of Fontable.attributes & Colorable.attributes,
-# NOT the font keywords!!!
+# This method compares 2 fonts, returning the differences between them.
+# Noting that the font-related attributes in the schema distill the
+# font properties into fewer attributes (font,fontsize,color,background,opacity),
+# the return value encodes both the attribute changes that would be needed to effect
+# the font change, along with the font properties that differed
+# Namely, the result is a hash keyed on the attribute name and whose value is a hash
+#    value      => "new_attribute_value"
+#    properties => { %fontproperties }
 sub relativeTo {
   my ($self, $other) = @_;
-  my ($fam,  $ser,  $shp,  $siz,  $col,  $bkg,  $opa,  $enc)  = @$self;
-  my ($ofam, $oser, $oshp, $osiz, $ocol, $obkg, $oopa, $oenc) = @$other;
+  my ($fam,  $ser,  $shp,  $siz,  $col,  $bkg,  $opa,  $enc,  $lang)  = @$self;
+  my ($ofam, $oser, $oshp, $osiz, $ocol, $obkg, $oopa, $oenc, $olang) = @$other;
   $fam  = 'serif' if $fam  && ($fam eq 'math');
   $ofam = 'serif' if $ofam && ($ofam eq 'math');
   my @diffs = (
@@ -282,17 +294,34 @@ sub relativeTo {
     (isDiff($ser, $oser) ? ($ser) : ()),
     (isDiff($shp, $oshp) ? ($shp) : ()));
   return (
-    (@diffs ? (font => join(' ', @diffs)) : ()),
-    (isDiff($siz, $osiz) ? (fontsize        => $siz) : ()),
-    (isDiff($col, $ocol) ? (color           => $col) : ()),
-    (isDiff($bkg, $obkg) ? (backgroundcolor => $bkg) : ()),
-    (isDiff($opa, $oopa) ? (opacity         => $opa) : ()),
+    (@diffs ?
+        (font => { value => join(' ', @diffs),
+          properties => { (isDiff($fam, $ofam) ? (family => $fam) : ()),
+            (isDiff($ser, $oser) ? (series => $ser) : ()),
+            (isDiff($shp, $oshp) ? (shape  => $shp) : ()) } })
+      : ()),
+    (isDiff($siz, $osiz)
+###      ? (fontsize => { value => $siz, properties => { size => $siz } })
+      ? (fontsize => { value => relativeFontSize($siz, $osiz), properties => { size => $siz } })
+      : ()),
+    (isDiff($col, $ocol)
+      ? (color => { value => $col, properties => { color => $col } })
+      : ()),
+    (isDiff($bkg, $obkg)
+      ? (backgroundcolor => { value => $bkg, properties => { background => $bkg } })
+      : ()),
+    (isDiff($opa, $oopa)
+      ? (opacity => { value => $opa, properties => { opacity => $opa } })
+      : ()),
+    (isDiff($lang, $olang)
+      ? ('xml:lang' => { value => $lang, properties => { language => $lang } })
+      : ()),
     ); }
 
 sub distance {
   my ($self, $other) = @_;
-  my ($fam,  $ser,  $shp,  $siz,  $col,  $bkg,  $opa,  $enc)  = @$self;
-  my ($ofam, $oser, $oshp, $osiz, $ocol, $obkg, $oopa, $oenc) = @$other;
+  my ($fam,  $ser,  $shp,  $siz,  $col,  $bkg,  $opa,  $enc,  $lang)  = @$self;
+  my ($ofam, $oser, $oshp, $osiz, $ocol, $obkg, $oopa, $oenc, $olang) = @$other;
   $fam  = 'serif' if $fam  && ($fam eq 'math');
   $ofam = 'serif' if $ofam && ($ofam eq 'math');
   return
@@ -304,6 +333,7 @@ sub distance {
     + (isDiff($bkg, $obkg) ? 1 : 0)
     + (isDiff($opa, $oopa) ? 1 : 0)
 ##  + (isDiff($enc,$oenc)  ? 1 : 0)
+    + (isDiff($lang, $olang) ? 1 : 0)
     ; }
 
 # This matches fonts when both are converted to strings (toString),
@@ -355,7 +385,7 @@ sub computeStringSize {
   my ($self, $string) = @_;
   my $size = $self->getSize;
   my $u    = (defined $string
-    ? ($font_size{ $self->getSize || $DEFSIZE } || 10) * 65535 * length($string)
+    ? (($self->getSize || DEFSIZE()) || 10) * 65535 * length($string)
     : 0);
   return (Dimension(0.75 * $u), Dimension(0.7 * $u), Dimension(0.2 * $u)); }
 
@@ -363,7 +393,7 @@ sub computeStringSize {
 sub getNominalSize {
   my ($self) = @_;
   my $size = $self->getSize;
-  my $u = ($font_size{ $self->getSize || $DEFSIZE } || 10) * 65535;
+  my $u = (($self->getSize || DEFSIZE()) || 10) * 65535;
   return (Dimension(0.75 * $u), Dimension(0.7 * $u), Dimension(0.2 * $u)); }
 
 # Here's where I avoid trying to emulate Knuth's line-breaking...
@@ -451,6 +481,8 @@ sub computeBoxesSize {
     else {                            # default is baseline (of the 1st line)
       my $h = $lines[0][1];
       $dp = $ht + $dp - $h; $ht = $h; } }
+  #print "BOXES SIZE ".($wd/65536)." x ".($ht/65536)." + ".($dp/65336)." for "
+  #  .join(' ',grep {$_} map { Stringify($_) } @$boxes)."\n";
   return (Dimension($wd), Dimension($ht), Dimension($dp)); }
 
 sub isSticky {
@@ -466,29 +498,34 @@ sub merge {
   my $family     = $options{family};
   my $series     = $options{series};
   my $shape      = $options{shape};
-  my $size       = $options{size};
+  my $size       = rationalizeFontSize($options{size});
   my $color      = $options{color};
   my $bg         = $options{background};
   my $opacity    = $options{opacity};
   my $encoding   = $options{encoding};
+  my $language   = $options{language};
   my $forcebold  = $options{forcebold};
   my $forceshape = $options{forceshape};
 
   # Fallback to positional invocation:
-  $family     = $$self[0] unless defined $family;
-  $series     = $$self[1] unless defined $series;
-  $shape      = $$self[2] unless defined $shape;
-  $size       = $$self[3] unless defined $size;
-  $color      = $$self[4] unless defined $color;
-  $bg         = $$self[5] unless defined $bg;
-  $opacity    = $$self[6] unless defined $opacity;
-  $encoding   = $$self[7] unless defined $encoding;
-  $forcebold  = $$self[8] unless defined $forcebold;
-  $forceshape = $$self[9] unless defined $forceshape;
+  $family     = $$self[0]  unless defined $family;
+  $series     = $$self[1]  unless defined $series;
+  $shape      = $$self[2]  unless defined $shape;
+  $size       = $$self[3]  unless defined $size;
+  $color      = $$self[4]  unless defined $color;
+  $bg         = $$self[5]  unless defined $bg;
+  $opacity    = $$self[6]  unless defined $opacity;
+  $encoding   = $$self[7]  unless defined $encoding;
+  $language   = $$self[8]  unless defined $language;
+  $forcebold  = $$self[9]  unless defined $forcebold;
+  $forceshape = $$self[10] unless defined $forceshape;
+
+  if (my $scale = $options{scale}) {
+    $size = $scale * $size; }
 
   return (ref $self)->new_internal($family, $series, $shape, $size,
-    $color,    $bg,        $opacity,
-    $encoding, $forcebold, $forceshape); }
+    $color, $bg, $opacity,
+    $encoding, $language, $forcebold, $forceshape); }
 
 # Instanciate the font for a particular class of symbols.
 # NOTE: This works in `normal' latex, but probably needs some tunability.
@@ -502,7 +539,7 @@ sub specialize {
   my ($self, $string) = @_;
   return $self unless defined $string;
   my ($family, $series, $shape, $size, $color, $bg, $opacity,
-    $encoding, $forcebold, $forceshape) = @$self;
+    $encoding, $language, $forcebold, $forceshape) = @$self;
   $series = 'bold' if $forcebold;
   if (($string =~ /^\p{Latin}$/) && ($string =~ /^\p{L}$/)) {    # Latin Letter
     $shape = 'italic' if !$shape && !$family; }
@@ -527,8 +564,8 @@ sub specialize {
     elsif ($series && ($series ne $DEFSERIES)) { $series = $DEFSERIES; } }
 
   return (ref $self)->new_internal($family, $series, $shape, $size,
-    $color,    $bg,        $opacity,
-    $encoding, $forcebold, $forceshape); }
+    $color, $bg, $opacity,
+    $encoding, $language, $forcebold, $forceshape); }
 
 #**********************************************************************
 1;
@@ -556,8 +593,9 @@ The attributes are
           fraktur, script
  series : medium, bold
  shape  : upright, italic, slanted, smallcaps
- size   : tiny, footnote, small, normal, large,
-          Large, LARGE, huge, Huge
+ size   : TINY, Tiny, tiny, SMALL, Small, small,
+          normal, Normal, large, Large, LARGE,
+          huge, Huge, HUGE, gigantic, Gigantic, GIGANTIC
  color  : any named color, default is black
 
 They are usually merged against the current font, attempting to mimic the,

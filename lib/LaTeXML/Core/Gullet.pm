@@ -204,20 +204,22 @@ sub readToken {
   my ($self) = @_;
   #  my $token = shift(@{$$self{pushback}});
   my $token;
+  my $cc;
   # Check in pushback first....
   while (defined($token = shift(@{ $$self{pushback} }))
-    && (($$token[1] == CC_COMMENT) || ($$token[1] == CC_MARKER))) {    # NOTE: Inlined
-
-    if ($$token[1] == CC_COMMENT) {
+    && ($cc = $$token[1])
+    && (($cc == CC_COMMENT) || ($cc == CC_MARKER))) {    # NOTE: Inlined
+    if ($cc == CC_COMMENT) {
       push(@{ $$self{pending_comments} }, $token); }
-    elsif ($$token[1] == CC_MARKER) {
+    elsif ($cc == CC_MARKER) {
       LaTeXML::Core::Definition::stopProfiling($token); } }
   return $token if defined $token;
   while (defined($token = $$self{mouth}->readToken())
-    && (($$token[1] == CC_COMMENT) || ($$token[1] == CC_MARKER))) {    # NOTE: Inlined
-    if ($$token[1] == CC_COMMENT) {
-      push(@{ $$self{pending_comments} }, $token); }                   # What to do with comments???
-    elsif ($$token[1] == CC_MARKER) {
+    && ($cc = $$token[1])
+    && (($cc == CC_COMMENT) || ($cc == CC_MARKER))) {    # NOTE: Inlined
+    if ($cc == CC_COMMENT) {
+      push(@{ $$self{pending_comments} }, $token); }     # What to do with comments???
+    elsif ($cc == CC_MARKER) {
       LaTeXML::Core::Definition::stopProfiling($token); } }
   return $token; }
 
@@ -260,17 +262,19 @@ sub readXToken {
       && ($toplevel || !$defn->isProtected)) { # is this the right logic here? don't expand unless digesting?
       local $LaTeXML::CURRENT_TOKEN = $token;
       my $t;
+      # Do the check here, to be more forgiving and more informative
       my @expansion = map { (($t = ref $_) eq 'LaTeXML::Core::Token' ? $_
           : ($t eq 'LaTeXML::Core::Tokens' ? @$_
             : (Error('misdefined', $token, undef,
                 "Expected a Token in expansion of " . ToString($token),
                 "got " . Stringify($_)), ()))) }
         $defn->invoke($self);
-      $self->unread(@expansion); }             # Expand and push back the result (if any) and continue
+      # already checked tokens, so just push to be re-read (like ->unread(@expansion); )
+      unshift(@{ $$self{pushback} }, @expansion); }
     else {
-      return $token; }                         # just return it
+      return $token; }    # just return it
   }
-  return; }                                    # never get here.
+  return; }               # never get here.
 
 # Read the next raw line (string);
 # primarily to read from the Mouth, but keep any unread input!
@@ -284,8 +288,13 @@ sub readRawLine {
     @tokens = grep { $_->getCatcode != CC_MARKER } @tokens;            # Remove
     map { LaTeXML::Core::Definition::stopProfiling($_) } @markers; }
   $$self{pushback} = [];
-  my $line = $$self{mouth}->readRawLine;
-  return (@tokens ? ToString(Tokens(@tokens)) . ($line || '') : $line); }
+  # If we still have peeked tokens, we ONLY want to combine it with the remainder
+  # of the current line from the Mouth (NOT reading a new line)
+  if (@tokens) {
+    return ToString(Tokens(@tokens)) . $$self{mouth}->readRawLine(1); }
+  # Otherwise, read the next line from the Mouth.
+  else {
+    return $$self{mouth}->readRawLine; } }
 
 #**********************************************************************
 # Mid-level readers: checking and matching tokens, strings etc.

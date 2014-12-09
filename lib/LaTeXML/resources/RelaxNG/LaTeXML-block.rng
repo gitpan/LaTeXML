@@ -101,6 +101,9 @@ the processor will lift such elements out of math, when possible</a:documentatio
   </define>
   <define name="equation_model">
     <a:documentation>Content model for \elementref{equation}.</a:documentation>
+    <optional>
+      <ref name="tag"/>
+    </optional>
     <zeroOrMore>
       <choice>
         <ref name="Math"/>
@@ -249,6 +252,11 @@ for example being table rows or cells arising from an eqnarray.</a:documentation
     <ref name="Common.attributes"/>
     <ref name="Labelled.attributes"/>
     <ref name="Backgroundable.attributes"/>
+    <optional>
+      <attribute name="data">
+        <a:documentation>raw data related to the listing; presumably the unformatted listing</a:documentation>
+      </attribute>
+    </optional>
   </define>
   <define name="listingblock_model">
     <a:documentation>Content model for \elementref{listingblock}.</a:documentation>

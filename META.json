@@ -4,7 +4,7 @@
       "Bruce Miller <bruce.miller@nist.gov>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.112621",
+   "generated_by" : "ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.132140",
    "license" : [
       "open_source"
    ],
@@ -22,7 +22,7 @@
    "prereqs" : {
       "build" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : 0
+            "ExtUtils::MakeMaker" : "0"
          }
       },
       "configure" : {
@@ -32,24 +32,25 @@
       },
       "runtime" : {
          "requires" : {
-            "Archive::Zip" : 0,
-            "DB_File" : 0,
-            "File::Which" : 0,
+            "Archive::Zip" : "0",
+            "DB_File" : "0",
+            "File::Which" : "0",
             "Getopt::Long" : "2.37",
-            "IO::String" : 0,
-            "Image::Size" : 0,
-            "JSON::XS" : 0,
-            "LWP" : 0,
-            "Parse::RecDescent" : 0,
-            "Pod::Parser" : 0,
-            "Test::More" : 0,
-            "URI" : 0,
+            "IO::String" : "0",
+            "Image::Size" : "0",
+            "JSON::XS" : "0",
+            "LWP" : "0",
+            "Parse::RecDescent" : "0",
+            "Pod::Parser" : "0",
+            "Test::More" : "0",
+            "Time::HiRes" : "0",
+            "URI" : "0",
             "XML::LibXML" : "1.61",
             "XML::LibXSLT" : "1.58",
             "perl" : "5.008001"
          }
       }
    },
-   "release_status" : "stable",
-   "version" : "v0.8.0"
+   "release_status" : "testing",
+   "version" : "v0.8.0_1"
 }

@@ -35,52 +35,68 @@ our @EXPORT = (
   qw( &om_expr ),
 );
 
-my $omURI = "http://www.openmath.org/OpenMath";    # CONSTANT
+my $omURI      = "http://www.openmath.org/OpenMath";    # CONSTANT
+my $omMimeType = 'application/openmath+xml';            # CONSTANT
 
 sub preprocess {
   my ($self, $doc, @nodes) = @_;
   $$self{hackplane1} = 0 unless $$self{hackplane1};
   $$self{plane1} = 1 if $$self{hackplane1} || !defined $$self{plane1};
-  $doc->adjust_latexml_doctype('OpenMath');        # Add OpenMath if LaTeXML dtd.
+  $doc->adjust_latexml_doctype('OpenMath');             # Add OpenMath if LaTeXML dtd.
   $doc->addNamespace($omURI, 'om');
   return; }
 
 sub outerWrapper {
-  my ($self, $doc, $math, $xmath, @conversion) = @_;
-  my $wrapped = ['om:OMOBJ', {}, @conversion];
-  if (my $id = $xmath->getAttribute('fragid')) {
-    $wrapped = $self->associateID($wrapped, $id); }
-  return ($wrapped); }
+  my ($self, $doc, $xmath, $om) = @_;
+  my $wrapped = ['om:OMOBJ', {}, $om];
+  if (my $id = $xmath->getAttribute('fragid')) {        # Associate id's, but DONT crossref
+    $wrapped = $self->associateID($wrapped, $id, 1); }
+  return $wrapped; }
 
 sub convertNode {
-  my ($self, $doc, $xmath, $style) = @_;
+  my ($self, $doc, $xmath) = @_;
   my ($item, @rest) = element_nodes($xmath);
-  if (@rest) {    # Unparsed ???
-    Warn('unexpected', 'content', undef,
-      "Got extra nodes for math content:" . $xmath->toString) if @rest; }
-  return om_expr($item); }
+  return { processor => $self,
+    encoding => 'OpenMath', mimetype => $omMimeType,
+    xml => (!$item || @rest ? om_unparsed($item, @rest) : om_expr($item)) }; }
 
 sub combineParallel {
-  my ($self, $doc, $math, $xmath, $primary, @secondaries) = @_;
-  my $tex = isElementNode($math) && $math->getAttribute('tex');
-  my $id = $xmath->getAttribute('fragid');
-  # secondaries should already have been wrapped with m:annotaiton by innerWrapper
+  my ($self, $doc, $xmath, $primary, @secondaries) = @_;
+  my $id   = $xmath->getAttribute('fragid');
   my @attr = ();
-  foreach my $pair (@secondaries) {
-    my ($proc, $secondary) = @$pair;
-    my $wrapped = ['om:OMFOREIGN', {}, $secondary];
-    $wrapped = $proc->associateID($wrapped, $id) if $id;
-    push(@attr, ['om:OMS', { cd => "Alternate", name => $proc->getEncodingName }], $wrapped); }
-  return (['om:OMATTR', {}, @attr,
-      ($tex ? (['om:OMS', { cd => 'Alternate', name => 'TeX' }], ['om:OMFOREIGN', {}, $tex]) : ()),
-      $primary]); }
+  foreach my $secondary (@secondaries) {
+    my $mimetype = $$secondary{mimetype} || 'unknown';
+    if ($mimetype eq $omMimeType) {    # Another OpenMath object?
+      push(@attr,
+        ['om:OMS', { cd => "Alternate", name => $mimetype }],
+        $$secondary{xml}); }
+    elsif (my $xml = $$secondary{xml}) {    # Or some other XML object?
+                                            # ORRRR should this be in other order?
+      push(@attr,
+        ['om:OMS', { cd => "Alternate", name => $mimetype }],
+        ['om:OMFOREIGN', {}, $$secondary{processor}->outerWrapper($doc, $xmath, $xml)]); }
+    # What do do with src?
+##    elsif (my $src = $$secondary{src}) {         # something referred to by a file? Image, maybe?
+##      push(@wsecondaries, ['m:annotation', { encoding => $mimetype, src => $src }]); }
+    elsif (my $string = $$secondary{string}) {    # simple string data?
+      push(@attr,
+        ['om:OMS', { cd => "Alternate", name => $mimetype }],
+        ['om:OMSTR', {}, $string]); }
+    # anything else ignore?
+  }
+  # Throw in a TeX encoding, for good measure. Should be own processor?
+  my $math = $xmath->parentNode;
+  if (my $tex = $math && isElementNode($math) && $math->getAttribute('tex')) {
+    push(@attr,
+      ['om:OMS', { cd => 'Alternate', name => 'TeX' }],
+      ['om:OMFOREIGN', {}, $tex]); }              # Should this simply be OMSTR ???
+  return { processor => $self,
+    mimetype => $omMimeType,
+    xml => ['om:OMATTR', {}, @attr, $$primary{xml}] }; }
 
 sub getQName {
   my ($node) = @_;
   return $LaTeXML::Post::DOCUMENT->getQName($node); }
-
-sub getEncodingName {
-  return 'OpenMath'; }
 
 sub rawIDSuffix {
   return '.om'; }
@@ -99,10 +115,12 @@ sub DefOpenMath {
 
 sub om_expr {
   my ($node) = @_;
+  # Get the real node, first.
+  $node = $LaTeXML::Post::DOCUMENT->realizeXMNode($node);
   my $result = om_expr_aux($node);
   # map any ID here, as well, BUT, since we follow split/scan, use the fragid, not xml:id!
   if (my $id = $node->getAttribute('fragid')) {
-    $$result[1]{'xml:id'} = $id . $LaTeXML::Post::MATHPROCESSOR->IDSuffix; }
+    $result = $LaTeXML::Post::MATHPROCESSOR->associateID($result, $id); }
   return $result; }
 
 # Is it clear that we should just getAttribute('role'),
@@ -111,11 +129,9 @@ sub om_expr_aux {
   my ($node) = @_;
   return OMError("Missing Subexpression") unless $node;
   my $tag = getQName($node);
-  if (($tag eq 'ltx:XMath') || ($tag eq 'ltx:XMWrap')) {
+  if (($tag eq 'ltx:XMWrap') || ($tag eq 'ltx:XMArg')) {    # Unparsed
     my ($item, @rest) = element_nodes($node);
-    Warn('unexpected', 'content', undef,
-      "Got extra nodes for content: " . $node->toString) if @rest;
-    return om_expr($item); }
+    return (!$item || @rest ? om_unparsed($item, @rest) : om_expr($item)); }
   elsif ($tag eq 'ltx:XMDual') {
     my ($content, $presentation) = element_nodes($node);
     return om_expr($content); }
@@ -131,6 +147,24 @@ sub om_expr_aux {
     return (); }
   else {
     return ['om:OMSTR', {}, $node->textContent]; } }
+
+sub om_unparsed {
+  my (@nodes) = @_;
+  if (!@nodes) {
+    return ['om:OME', {},
+      ['om:OMS', { name => 'unexpected', cd => 'moreerrors' }],
+      ['om:OMSTR', {}, "Missing Subexpression"]]; }
+  else {
+    my @om = ();
+    foreach my $node (@nodes) {
+      $node = $LaTeXML::Post::DOCUMENT->realizeXMNode($node);
+      my $tag = getQName($node);
+      if ($tag eq 'ltx:XMHint') { }
+      elsif (($tag eq 'ltx:XMTok') && (($node->getAttribute('role') || 'UNKNOWN') eq 'UNKNOWN')) {
+        push(@om, ['om:OMS', { cd => 'unknown', name => $node->textContent }]); }
+      else {
+        push(@om, om_expr_aux($node)); } }
+    return ['om:OME', {}, ['om:OMS', { cd => 'ambiguous', name => 'fragments' }], @om]; } }
 
 sub lookupConverter {
   my ($mode, $role, $name) = @_;

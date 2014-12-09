@@ -37,11 +37,13 @@ DefMacro('\unexpanded {}', '#1');
 #======================================================================
 # 3.2. Provision for re-scanning already read text
 
-# \readline
-# Since we haven't implemented \read ... ?!
-DefMacro('\read Number SkipKeyword:to Token', sub {
-    my ($gullet, $fh, $token) = @_;
-    DefMacroI($token, undef, Tokens()); });
+# \readline; like \read, but only spaces & other
+DefMacro('\readline Number SkipKeyword:to SkipSpaces Token', sub {
+    my ($gullet, $port, $token) = @_;
+    $port = ToString($port);
+    if (my $mouth = LookupValue('input_file:' . $port)) {
+      DefMacroI($token, undef, Tokens(Explode($mouth->readRawLine))); }
+    return; });
 
 DefMacro('\scantokens {}', sub {
     LaTeXML::Core::Mouth->new(UnTeX($_[1]))->readTokens; });
@@ -129,16 +131,21 @@ DefRegister('\tracingscantokens' => Number(0));
 # NOTE: These tokens are NOT used anywhere (yet?)
 DefRegister('\everyeof', Tokens());
 
-# NOTE REMOVE defn from TeX.pool.ltxml.
-# \middle
-DefConstructor('\middle Token', "<ltx:XMWrap stretchy='true'>#1</ltx:XMWrap>",
-  afterConstruct => sub { addDelimiterRole($_[0], 'MIDDLE'); });
+DefConstructor('\middle Token', '#1',
+  afterConstruct => sub {
+    my ($document) = @_;
+    my $current = $document->getNode;
+    my $delim = $document->getLastChildElement($current) || $current;
+    $document->setAttribute($delim, role     => 'MIDDLE');
+    $document->setAttribute($delim, stretchy => 'true');
+    return; });
 
 # \unless someif
 DefConditional('\unless Token', sub {
     my ($gullet, $if) = @_;
     my ($defn, $test);
-    if (($defn = LookupMeaning($if)) && $$defn{is_conditional} && ($test = $defn->getTest)) {
+    if (($defn = LookupMeaning($if)) && (($$defn{conditional_type} || '') eq 'if')
+      && ($test = $defn->getTest)) {
       # Invert the if's test!
       !&$test($gullet, $defn->readArguments($gullet)); }
     else {

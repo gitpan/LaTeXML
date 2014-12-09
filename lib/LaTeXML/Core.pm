@@ -164,7 +164,8 @@ sub finishDigestion {
   my $ifstack = $state->lookupValue('if_stack');
   if ($ifstack && $$ifstack[0]) {
     Error('expected', '\fi', $stomach,
-      "Input ended while conditional " . ToString($$ifstack[0]{token}) . " was incomplete"); }
+      "Input ended while conditional " . ToString($$ifstack[0]{token}) . " was incomplete",
+      "started at " . ToString($$ifstack[0]{start})); }
   $stomach->getGullet->flush;
   return List(@stuff); }
 
@@ -209,6 +210,7 @@ sub convertDocument {
 
       if (my $rules = $state->lookupValue('DOCUMENT_REWRITE_RULES')) {
         NoteBegin("Rewriting");
+        $document->markXMNodeVisibility;
         foreach my $rule (@$rules) {
           $rule->rewrite($document, $document->getDocument->documentElement); }
         NoteEnd("Rewriting"); }

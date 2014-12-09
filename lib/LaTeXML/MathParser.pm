@@ -28,7 +28,7 @@ use base (qw(Exporter));
 our @EXPORT_OK = (qw(&Lookup &New &Absent &Apply &ApplyNary &recApply
     &Annotate &InvisibleTimes &InvisibleComma
     &NewFormulae &NewFormula &NewList
-    &ApplyDelimited &NewScript &DecorateOperator
+    &ApplyDelimited &NewScript &DecorateOperator &InterpretDelimited
     &LeftRec
     &Arg &MaybeFunction
     &SawNotation &IsNotationAllowed
@@ -37,16 +37,11 @@ our %EXPORT_TAGS = (constructors
     => [qw(&Lookup &New &Absent &Apply &ApplyNary &recApply
       &Annotate &InvisibleTimes &InvisibleComma
       &NewFormulae &NewFormula &NewList
-      &ApplyDelimited &NewScript &DecorateOperator
+      &ApplyDelimited &NewScript &DecorateOperator &InterpretDelimited
       &LeftRec
       &Arg &MaybeFunction
       &SawNotation &IsNotationAllowed
       &isMatchingClose &Fence)]);
-
-my $DEFAULT_FONT = LaTeXML::Common::Font->new(    # [CONSTANT]
-  family => 'serif',   series     => 'medium',
-  shape  => 'upright', size       => 'normal',
-  color  => 'black',   background => 'white', opacity => 1);
 
 # ================================================================================
 sub new {
@@ -92,7 +87,31 @@ sub parseMath {
 
 sub getQName {
   my ($node) = @_;
-  return $LaTeXML::MathParser::DOCUMENT->getModel->getNodeQName($node); }
+  if (ref $node eq 'ARRAY') {
+    return $$node[0]; }
+  else {
+    return $LaTeXML::MathParser::DOCUMENT->getModel->getNodeQName($node); } }
+
+sub realizeXMNode {
+  my ($node) = @_;
+  my $doc = $LaTeXML::MathParser::DOCUMENT;
+  my $idref;
+  if (!defined $node) {
+    return; }
+  elsif (ref $node eq 'ARRAY') {
+    $idref = $$node[1]{idref} if $$node[0] eq 'ltx:XMRef'; }
+  elsif (ref $node eq 'XML::LibXML::Element') {
+    $idref = $node->getAttribute('idref')
+      if $doc->getModel->getNodeQName($node) eq 'ltx:XMRef'; }
+  if ($idref) {
+    # Can it happen that $realnode is, itself, an XMRef? Then we should recurse!
+    if (my $realnode = $doc->lookupID($idref)) {
+      return $realnode; }
+    else {
+      Error("expected", $idref, undef, "Cannot find a node with xml:id='$idref'");
+      return ['ltx:ERROR', {}, "Missing XMRef idref=$idref"]; } }
+  else {
+    return $node; } }
 
 # ================================================================================
 sub clear {
@@ -110,8 +129,8 @@ sub token_prettyname {
   if (defined $name) { }
   elsif ($name = $node->textContent) {
     my $font = $LaTeXML::MathParser::DOCUMENT->getNodeFont($node);
-    my %attr = $font->relativeTo($DEFAULT_FONT);
-    my $desc = join(' ', map { ToString($_) } values %attr);
+    my %attr = $font->relativeTo(LaTeXML::Common::Font->textDefault);
+    my $desc = join(' ', map { ToString($attr{$_}{value}) } keys %attr);
     $name .= "{$desc}" if $desc; }
   else {
     $name = Stringify($node); }    # what else ????
@@ -145,6 +164,7 @@ sub printNode {
 sub getTokenMeaning {
   my ($node) = @_;
   my $x;
+  $node = realizeXMNode($node);
   return (defined($x = $node->getAttribute('meaning')) ? $x
     : (defined($x = $node->getAttribute('name')) ? $x
       : (($x = $node->textContent) ne '' ? $x
@@ -180,10 +200,11 @@ sub node_location {
 # us something about what the child must be....
 sub parse {
   my ($self, $xnode, $document) = @_;
-  local $LaTeXML::MathParser::STRICT = 1;
-  local $LaTeXML::MathParser::WARNED = 0;
-  local $LaTeXML::MathParser::XNODE  = $xnode;
-
+  local $LaTeXML::MathParser::STRICT      = 1;
+  local $LaTeXML::MathParser::WARNED      = 0;
+  local $LaTeXML::MathParser::XNODE       = $xnode;
+  local $LaTeXML::MathParser::PUNCTUATION = {};
+  local $LaTeXML::MathParser::LOSTNODES   = {};
   if (my $result = $self->parse_rec($xnode, 'Anything,', $document)) {
     # Add text representation to the containing Math element.
     my $p = $xnode->parentNode;
@@ -195,6 +216,16 @@ sub parse {
         $p = $n[0]; }
       else {
         Fatal('malformed', '<XMath>', $xnode, "XMath node has DOCUMENT_FRAGMENT for parent!"); } }
+    # HACK: replace XMRef's to stray trailing punctution
+    foreach my $id (keys %$LaTeXML::MathParser::PUNCTUATION) {
+      my $r = $$LaTeXML::MathParser::PUNCTUATION{$id}->cloneNode;
+      $r->removeAttribute('xml:id');
+      foreach my $n ($document->findnodes("descendant-or-self::ltx:XMRef[\@idref='$id']", $p)) {
+        $document->replaceTree($r, $n); } }
+    foreach my $id (keys %$LaTeXML::MathParser::LOSTNODES) {
+      foreach my $n ($document->findnodes("descendant-or-self::ltx:XMRef[\@idref='$id']", $p)) {
+        $document->setAttribute($n, idref => $$LaTeXML::MathParser::LOSTNODES{$id}); } }
+
     $p->setAttribute('text', text_form($result)); }
   return; }
 
@@ -223,10 +254,18 @@ sub parse_rec {
     else {                        # Replace the whole node for XMArg, XMWrap; preserve some attributes
       NoteProgressDetailed($TAG_FEEDBACK{$tag} || '.');
       # Copy all attributes (Annotate will sort out)
-      $result = Annotate($result,
-        map { (getQName($_) => $_->getValue) }
-          grep { $_->nodeType == XML_ATTRIBUTE_NODE } $node->attributes);
-      $result = $document->replaceTree($result, $node); }
+      my $resultid = p_getAttribute($result, 'xml:id');
+      my %attr = map { (getQName($_) => $_->getValue) }
+        grep { $_->nodeType == XML_ATTRIBUTE_NODE } $node->attributes;
+      $result = Annotate($result, %attr);
+      $result = $document->replaceTree($result, $node);
+      my $newid = p_getAttribute($result, 'xml:id');
+      # Danger: the above code replaced the id on the parsed result with the one from XMArg,..
+      # If there are any references to $resultid, we need to point them to $newid!
+      if ($resultid && $newid && ($resultid ne $newid)) {
+        foreach my $ref ($document->findnodes("//*[\@idref='$resultid']")) {
+          $ref->setAttribute(idref => $newid); } }
+    }
     return $result; }
   else {
     $self->parse_kludge($node, $document);
@@ -263,38 +302,63 @@ my $HINT_PUNCT_THRESHOLD = 10.0;    # \quad or bigger becomes punctuation ? [CON
 
 sub filter_hints {
   my ($self, $document, @nodes) = @_;
+  my @prefiltered      = ();
+  my $prev             = undef;
+  my $pending_comments = '';
+  my $pending_space    = 0.0;
+  # Filter the nodes, watching for XMHint's and Comments.
+  foreach my $node (@nodes) {
+    my $type = $node->nodeType;
+    if ($type == XML_TEXT_NODE) {    # text? better be (ignorable) whitespace!
+      my $string = $node->textContent;
+      if ($string =~ /\S/) {
+        Warn('unexpected', 'text', $node, "Unexpected text in Math tree"); } }
+    elsif ($type == XML_COMMENT_NODE) {    # Comment!
+      my $comment = $node->getData;
+      if ($prev) {                         # Append to previous element's comments
+        my $c = $prev->getAttribute('_comment');
+        $prev->setAttribute(_comment => ($c ? $c . "\n" . $comment : $comment)); }
+      else {                               # Or save for first
+        $pending_comments = ($pending_comments ? $pending_comments . "\n" . $comment : $comment); } }
+    elsif ($type != XML_ELEMENT_NODE) {
+      Warn('unexpected', 'node', $node, "Unexpected item in Math tree"); }
+    elsif (getQName($node) eq 'ltx:XMHint') {    # If a Hint node?
+      if (my $width = $node->getAttribute('width')) {
+        if (my $pts = getXMHintSpacing($width)) {
+          if ($prev) {
+            my $s = $prev->getAttribute('_space') || 0.0;
+            $prev->setAttribute(_space => $s + $pts); }
+          else {
+            $pending_space += $pts; } } } }
+    else {                                       # Some other element.
+      if ($pending_comments) {
+        $node->setAttribute(_pre_comment => $pending_comments);
+        $pending_comments = ''; }
+      if ($pending_space) {
+        $node->setAttribute(lpadding =>
+            LaTeXML::Common::Dimension::attributeformat($pending_space * 65536));
+        $pending_space = 0.0; }
+      push(@prefiltered, $node); $prev = $node; }    # Keep it.
+  }
   my @filtered = ();
-  my $prev     = undef;
-  while (@nodes) {
-    my $c = shift(@nodes);
-    if (getQName($c) ne 'ltx:XMHint') {    # Is it NOT a Hint node?
-      push(@filtered, $c); $prev = $c; }    # Keep it.
-    elsif (my $width = $c->getAttribute('width')) {    # Is it a spacing hint?
-          # Get the pts (combining w/any following spacing hints)
-      my $pts = getXMHintSpacing($width);
-      while (@nodes && (getQName($nodes[0]) eq 'ltx:XMHint')    # Combine w/ more?
-        && ($width = $c->getAttribute('width'))) {
-        $pts += getXMHintSpacing($width);
-        shift(@nodes); }                                        # and remove the extra hints
-          # A wide space, between Stuff, is likely acting like punctuation, so convert it
-      if ($prev && (($prev->getAttribute('role') || '') ne 'PUNCT')
-        && scalar(@nodes) && ($pts >= $HINT_PUNCT_THRESHOLD)) {
-        $c = $c->cloneNode(1); $c->setNodeName('XMTok');
-        $c->removeAttribute('width');
-        $c->removeAttribute('height');    # ?
-        $c->setAttribute(role => 'PUNCT');    # convert to punctuation!
-        $c->appendText(spacingToString($pts));
-        push(@filtered, $c); }
+  # Filter through the pre-filtered nodes looking for large rpadding.
+  foreach my $node (@prefiltered) {
+    push(@filtered, $node);
+    if (my $s = $node->getAttribute('_space')) {
+      $node->removeAttribute('_space');
+      if (($s >= $HINT_PUNCT_THRESHOLD) && (($node->getAttribute('role') || '') ne 'PUNCT')) {
+        # Create a new Punctuation node (XMTok) from the wide space
+        # I'm leary that this is a safe way to create an XML node that's NOT in the tree, but...
+        my $p = $node->parentNode;
+        #        my $punct = $document->openElementAt($p,'ltx:XMTok',role=>'PUNCT',rpadding=>$s.'pt');
+        my $punct = $document->openElementAt($p, 'ltx:XMTok', role => 'PUNCT',
+          name => ('q' x int($s / 10)) . 'uad');
+        $punct->appendText(spacingToString($s));
+        $p->removeChild($punct);    # But don't actually leave it in the tree!!!!
+        push(@filtered, $punct); }
       else {
-        if ($pts) {
-          if ($prev) {                        # Else add rpadding to previous item
-            $prev->setAttribute(rpadding => $pts . 'pt'); }
-          elsif (scalar(@nodes)) {            # or maybe lpadding to next??
-            $nodes[0]->setAttribute(lpadding => $pts . 'pt'); }
-        } }
-      $prev = undef; }                        # at any rate, remove it now
-    else {
-      $prev = undef; } }                      # other hint; remove it now
+        $node->setAttribute(rpadding =>
+            LaTeXML::Common::Dimension::attributeformat($s * 65536)); } } }
   return @filtered; }
 
 # Given a width attribute on an XMHint, return the pts, if any
@@ -333,7 +397,7 @@ sub spacingToString {
 # Especially, when we want to try alternative parse strategies.
 sub parse_kludge {
   my ($self, $mathnode, $document) = @_;
-  my @nodes = $self->filter_hints($document, element_nodes($mathnode));
+  my @nodes = $self->filter_hints($document, $mathnode->childNodes);
   # the 1st array in stack accumlates the nodes within the current fenced row.
   # When there's only a single array, it's single entry will be the complete row.
   my @stack = ([], []);
@@ -368,21 +432,29 @@ sub parse_kludge {
 
 sub parse_kludgeScripts_rec {
   my ($self, $a, $b, @more) = @_;
-  if (!defined $b) {
+  if ($$a[1] =~ /^FLOAT(SUB|SUPER)SCRIPT$/) {    # a Floating script? maybe pre-script
+    if (!defined $b) {                           # with nothing behind? => script on nothing
+      return ($$a[0]); }                         # but just leave it alone.
+    elsif ($$b[1] =~ /^POST(SUB|SUPER)SCRIPT$/) {    # followed by another script?
+      if (@more) {    # followed by a something? => Combined pre sub & super
+        my ($base, @rest) = $self->parse_kludgeScripts_rec(@more);
+        return (NewScript(NewScript($base, $$b[0], 'pre'), $$a[0], 'pre'), @rest); }
+      else {          # else floating sub & super
+        return (NewScript(NewScript(Absent(), $$b[0], 'post'), $$a[0], 'post')); } }
+    else {            # else just prescript on whatever follows
+      my ($base, @rest) = $self->parse_kludgeScripts_rec($b, @more);
+      return (NewScript($base, $$a[0], 'pre'), @rest); } }
+  elsif (!defined $b) {    # isolated thing?
     return ($$a[0]); }
-  elsif ($$a[1] =~ /^FLOAT(SUB|SUPER)SCRIPT$/) {
-    # A floating script is applied to the following thing as a pre-script.
-    my ($base, @rest) = $self->parse_kludgeScripts_rec($b, @more);
-    return (NewScript($base, $$a[0]), @rest); }
   elsif ($$b[1] =~ /^POST(SUB|SUPER)SCRIPT$/) {
     # or a postscript is applied to the preceding thing.
     return $self->parse_kludgeScripts_rec([NewScript($$a[0], $$b[0]), ''], @more); }
-  else {
+  else {                   # else skip over a and continue
     return ($$a[0], $self->parse_kludgeScripts_rec($b, @more)); } }
 
 # sub parse_kludge {
 #   my($self,$mathnode,$document)=@_;
-#   my @nodes = $self->filter_hints($document,element_nodes($mathnode));
+#   my @nodes = $self->filter_hints($document,$mathnode->childNodes);
 #   map { $mathnode->removeChild($_) } @nodes;
 #   my @result=();
 #   while(@nodes){
@@ -441,15 +513,21 @@ sub parse_kludgeScripts_rec {
 # Convert to textual form for processing by MathGrammar
 sub parse_single {
   my ($self, $mathnode, $document, $rule) = @_;
-  my @nodes = $self->filter_hints($document, element_nodes($mathnode));
+  my @nodes = $self->filter_hints($document, $mathnode->childNodes);
 
   my ($punct, $result, $unparsed);
   # Extract trailing punctuation, if rule allows it.
   if ($rule =~ s/,$//) {
     my ($x, $r) = ($nodes[-1]);
-    $punct = ($x && (getQName($x) eq 'ltx:XMTok')
+    $punct = ($x && ($x = realizeXMNode($x)) && (getQName($x) eq 'ltx:XMTok')
         && ($r = $x->getAttribute('role')) && (($r eq 'PUNCT') || ($r eq 'PERIOD'))
-      ? pop(@nodes) : undef); }
+      ? pop(@nodes) : undef);
+    # Special case hackery, in case this thing is XMRef'd!!!
+    # We could just stick it on the end of the presentation,
+    # but it doesn't belong in the content at all!?!?
+    if (my $id = $punct && $punct->getAttribute('xml:id')) {
+      $$LaTeXML::MathParser::PUNCTUATION{$id} = $punct; }
+  }
 
   if (scalar(@nodes) < 2) {    # Too few nodes? What's to parse?
     $result = $nodes[0] || Absent(); }
@@ -519,20 +597,16 @@ sub parse_internal {
 
 sub getGrammaticalRole {
   my ($self, $node) = @_;
-  my $tag   = getQName($node);
-  my $rnode = $node;
-  if ($tag eq 'ltx:XMRef') {
-    if (my $id = $node->getAttribute('id')) {
-      $rnode = $LaTeXML::MathParser::DOCUMENT->lookupID($id);
-      $tag   = getQName($rnode); } }
-  my $role = $rnode->getAttribute('role');
+  $node = realizeXMNode($node);
+  my $role = $node->getAttribute('role');
   if (!defined $role) {
+    my $tag = getQName($node);
     if ($tag eq 'ltx:XMTok') {
       $role = 'UNKNOWN'; }
     elsif ($tag eq 'ltx:XMDual') {
       $role = $LaTeXML::MathParser::DOCUMENT->getFirstChildElement($node)->getAttribute('role'); }
     $role = 'ATOM' unless defined $role; }
-  $self->note_unknown($rnode) if ($role eq 'UNKNOWN') && $LaTeXML::MathParser::STRICT;
+  $self->note_unknown($node) if ($role eq 'UNKNOWN') && $LaTeXML::MathParser::STRICT;
   return $role; }
 
 # How many tokens before & after the failure point to report in the Warning message.
@@ -583,6 +657,7 @@ sub node_string {
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # Conversion to a less ambiguous, mostly-prefix form.
 # Mostly for debugging information?
+# Note that the nodes are true libXML nodes, already absorbed into the document
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sub text_form {
   my ($node) = @_;
@@ -608,12 +683,14 @@ my %IS_INFIX = (METARELOP => 1,    # [CONSTANT]
 
 sub textrec {
   my ($node, $outer_bp, $outer_name) = @_;
+  $node = realizeXMNode($node);
   my $tag = getQName($node);
   $outer_bp   = 0  unless defined $outer_bp;
   $outer_name = '' unless defined $outer_name;
   if ($tag eq 'ltx:XMApp') {
     my $app_role = $node->getAttribute('role');
     my ($op, @args) = element_nodes($node);
+    $op = realizeXMNode($op);
     if ($app_role && $app_role =~ /^FLOAT(SUB|SUPER)SCRIPT$/) {
       return ($1 eq 'SUPER' ? '^' : '_') . textrec($op); }
     else {
@@ -628,13 +705,13 @@ sub textrec {
     my $name = getTokenMeaning($node);
     $name = 'Unknown' unless defined $name;
     return $PREFIX_ALIAS{$name} || $name; }
-  elsif ($tag eq 'ltx:XMWrap') {
+  elsif (($tag eq 'ltx:XMWrap') || ($tag eq 'ltx:XMCell')) {
     # ??
     return join('@', map { textrec($_) } element_nodes($node)); }
   elsif ($tag eq 'ltx:XMArray') {
     return textrec_array($node); }
   else {
-    return '[' . $node->textContent . ']'; } }
+    return '[' . (p_getValue($node) || '') . ']'; } }
 
 sub textrec_apply {
   my ($name, $op, @args) = @_;
@@ -676,34 +753,23 @@ sub textrec_array {
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # Constructors used in grammar
 # All the tree construction in the grammar should come through these operations.
-# We have to be _extremely_ careful about cloning nodes when using addXML::LibXML!!!
-# If we add one node to another, it is _silently_ removed from any parent it may have had!
+# We avoid mucking with the actual XML nodes (both to avoid modifying the original
+# tree until we have a successful parse, and to avoid XML::LibXML cloning nightmares)
+# We are converting XML nodes to array representation: [$tag, {%attr},@children]
+# This means any inspection of nodes has to recognize that
+#  * node may be in XML vs ARRAY representation
+#  * node may be an XMRef to another node whose properties are the ones we should use.
+#
+# Also, when we are examining a node's properties (roles, fences, script positioning, etc)
+# we should be careful to check for XMRef indirection and examine the properties
+# of the node that was referred to.
+# HOWEVER, we should construct our parse tree using (a clone of) the XMRef node,
+# rather than (a clone of) the referred to node, so as to preserve identity.
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-# ================================================================================
-# Morph these away!!!
-# What's the point?
-# So that we can do the parse, obtaining a parse tree,
-# but WITHOUT modifying, moving, or otherwise affecting the existing nodes.
-# This is so we can (potentially) keep the parsed & unparsed separate,
-# and even try out Earley style parsers that give multiple parse trees.
-#
-# In principle, the existing code allows that, but undoubtedly has leaks
-# where the existing nodes get altered (esp. attributes added/changed).
-# Also, some code is quite convoluted in order to keep namespace declarations clean.
-#
-# Much easier approach is to use the array rep, then let Common::XML code
-# build/clone as needed; this should get the namespaces right.
-# Also, we can defer doing the Lookup till later...
-# However, this means that the API that the MathGrammar sees, may
-# be passing us:
-#    strings (either explicit, or lexemes!
-#       can we assume lexeme names will never be mistaken for explicit strings?
-#    arrays (representing nodes to be built)
-#    nodes (? at least embedded in the arrays)
-# So, this is simpler?
-#
-# How many "partial trees" get built during parsing that eventually fail?
+# We're currently keeping the id's on the nodes as they get cloned,
+# since they'll (maybe) replace the unparsed nodes.
+# However, if we consider multiple parses or preserving both parsed & unparsed,
+# we may have to do some adaptation and id shifting.
 # ================================================================================
 
 # ================================================================================
@@ -713,6 +779,7 @@ sub Lookup {
   return $$LaTeXML::MathParser::LEXEMES{$lexeme}; }
 
 # The following accessors work on both the LibXML and ARRAY representations
+# but they do NOT automatically dereference XMRef!
 sub p_getValue {
   my ($node) = @_;
   if (!defined $node) {
@@ -728,6 +795,8 @@ sub p_getValue {
       return join('', grep { defined $_ } map { p_getValue($_) } @args); }
     else {
       return $$node[1]{name}; } }
+  elsif (ref $node eq 'XML::LibXML::Text') {
+    return $node->textContent; }
   else {                                            # ????
     return $node; } }
 
@@ -779,7 +848,9 @@ sub New {
     my $value = p_getValue($attributes{$key});
     $attr{$key} = $value if defined $value; }
   if (!$attr{font}) {
-    $attr{font} = ($content && $content =~ /\S/ ? $DEFAULT_FONT->specialize($content) : LaTeXML::Common::Font->new()); }
+    $attr{font} = ($content && $content =~ /\S/
+      ? LaTeXML::Common::Font->textDefault->specialize($content)
+      : LaTeXML::Common::Font->new()); }
   return ['ltx:XMTok', {%attr}, ($content ? ($content) : ())]; }
 
 # Some handy shorthands.
@@ -804,6 +875,7 @@ sub Arg {
 
 # Add more attributes to a node.
 # Values can be strings or nodes whose text content is used.
+# Note that it avoids changing the underlying XML, so it may return a new object!
 sub Annotate {
   my ($node, %attributes) = @_;
   my %attrib = ();
@@ -853,12 +925,27 @@ sub Apply {
 # Apply $op to a `delimited' list of arguments of the form
 #     open, expr (punct expr)* close
 # after extracting the opening and closing delimiters, and the separating punctuation
+# Generate an XMDual, so that any styling of delimiters & punctuation is preserved.
 sub ApplyDelimited {
   my ($op, @stuff) = @_;
-  my $open  = shift(@stuff);
-  my $close = pop(@stuff);
-  my ($seps, @args) = extract_separators(@stuff);
-  return Apply(Annotate($op, argopen => $open, argclose => $close, separators => $seps), @args); }
+  my $open  = $stuff[0];
+  my $close = $stuff[-1];
+  my ($seps, @args) = extract_separators(@stuff[1 .. $#stuff - 1]);
+  return ['ltx:XMDual', {},
+    Apply(LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, $op),
+      LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, @args)),
+    Apply($op, ['ltx:XMWrap', {}, @stuff])]; }
+
+# This is similar, but "interprets" a delimited list as being the
+# application of some operator to the items in the list.
+sub InterpretDelimited {
+  my ($op, @stuff) = @_;
+  my $open  = $stuff[0];
+  my $close = $stuff[-1];
+  my ($seps, @args) = extract_separators(@stuff[1 .. $#stuff - 1]);
+  return ['ltx:XMDual', {},
+    Apply($op, LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, @args)),
+    ['ltx:XMWrap', {}, @stuff]]; }
 
 # Given a sequence of operators, form the nested application op(op(...(arg)))
 sub recApply {
@@ -874,7 +961,7 @@ sub extract_separators {
   if (@stuff) {
     push(@args, shift(@stuff));    # Grab 1st expression
     while (@stuff) {               # Expecting pairs of punct, expression
-      my $p = shift(@stuff);
+      my $p = realizeXMNode(shift(@stuff));
       $punct .=
         ($punct ? ' ' : '')        # Delimited by SINGLE SPACE!
         . spacingToString(getXMHintSpacing(p_getAttribute($p, 'lpadding')))
@@ -927,16 +1014,15 @@ my %encloseN = (    # [CONSTANT]
 
 sub isMatchingClose {
   my ($open, $close) = @_;
-  my $oname  = p_getValue($open);
-  my $cname  = p_getValue($close);
+  my $oname  = p_getValue(realizeXMNode($open));
+  my $cname  = p_getValue(realizeXMNode($close));
   my $expect = $balanced{$oname};
   return (defined $expect) && ($expect eq $cname); }
 
 # Given a delimited sequence: open expr (punct expr)* close
 # (OR, an empty sequence open close)
 # Convert it into the appropriate thing, depending on the specific open & close used.
-# If the open/close are `simple' delimiters and there is only one expr,
-# simply add open/close attributes.
+# Generate an XMDual to preserve any styling of delimiters and punctuation.
 sub Fence {
   my (@stuff) = @_;
   # Peak at delimiters to guess what kind of construct this is.
@@ -945,13 +1031,11 @@ sub Fence {
     "Even number of arguments to Fence(); should be of form open,expr,(punct,expr)*,close",
     "got " . join(' ', map { ToString($_) } @stuff))
     if ($nargs != 2) && (($nargs % 2) == 0);    # either empty or odd number
-  my ($open, $close) = ($stuff[0], $stuff[-1]);
-  my $lpad = (ref $open)  && $open->getAttribute('lpadding');
-  my $rpad = (ref $close) && $close->getAttribute('rpadding');
-  my $o    = p_getValue($open);
-  my $c    = p_getValue($close);
-  my $n    = int(($nargs - 2 + 1) / 2);
-  my @p = map { p_getValue(@stuff[2 * $_]) } 1 .. $n - 1;
+  my ($open, $close) = (realizeXMNode($stuff[0]), realizeXMNode($stuff[-1]));
+  my $o  = p_getValue($open);
+  my $c  = p_getValue($close);
+  my $n  = int(($nargs - 2 + 1) / 2);
+  my @p  = map { p_getValue(realizeXMNode(@stuff[2 * $_])) } 1 .. $n - 1;
   my $op = ($n == 0
     ? 'list'                                    # ?
     : ($n == 1
@@ -959,16 +1043,13 @@ sub Fence {
       : ($n == 2
         ? ($enclose2{ $o . '@' . $p[0] . '@' . $c } || 'list')
         : ($encloseN{ $o . '@' . $p[0] . '@' . $c } || 'list'))));
-  # When we're parsing XMWrap, we shouldn't try so hard to infer a meaning (it'll usually be wrong)
-  $op = undef unless $LaTeXML::MathParser::STRICT;
-  if (($n == 1) && (!defined $op)) {            # Simple case.
-    return Annotate($stuff[1],
-      open     => ($open  ? $open  : undef),
-      close    => ($close ? $close : undef),
-      lpadding => ($lpad  ? $lpad  : undef),
-      rpadding => ($rpad  ? $rpad  : undef)); }
+  $op = 'delimited-' . $o . $c unless defined $op;
+  if (($n == 1) && ($op eq 'delimited-()')) {    # Hopefully, can just ignore the parens?
+    return ['ltx:XMDual', {},
+      LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, $stuff[1]),
+      ['ltx:XMWrap', {}, @stuff]]; }
   else {
-    return ApplyDelimited(New($op, undef, role => 'FENCED'), @stuff); } }
+    return InterpretDelimited(New($op), @stuff); } }
 
 # NOTE: It might be best to separate the multiple Formulae into separate XMath's???
 # but only at the top level!
@@ -978,7 +1059,10 @@ sub NewFormulae {
     return $stuff[0]; }
   else {
     my ($seps, @formula) = extract_separators(@stuff);
-    return Apply(New('formulae', undef, separators => $seps), @formula); } }
+    return ['ltx:XMDual', {},
+      Apply(New('formulae'),
+        LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, @formula)),
+      ['ltx:XMWrap', {}, @stuff]]; } }
 
 # A Formula is an alternation of expr (relationalop expr)*
 # It presumably would be equivalent to (expr1 relop1 expr2) AND (expr2 relop2 expr3) ...
@@ -999,7 +1083,10 @@ sub NewList {
     return $stuff[0]; }
   else {
     my ($seps, @items) = extract_separators(@stuff);
-    return Apply(New('list', undef, separators => $seps, role => 'FENCED'), @items); } }
+    return ['ltx:XMDual', {},
+      Apply(New('list'),
+        LaTeXML::Package::createXMRefs($LaTeXML::MathParser::DOCUMENT, @items)),
+      ['ltx:XMWrap', {}, @stuff]]; } }
 
 # Given alternation of expr (addop expr)*, compose the tree (left recursive),
 # flattenning portions that have the same operator
@@ -1008,9 +1095,10 @@ sub LeftRec {
   my ($arg1, @more) = @_;
   if (@more) {
     my $op     = shift(@more);
-    my $opname = p_getTokenMeaning($op);
+    my $opname = p_getTokenMeaning(realizeXMNode($op));
     my @args   = ($arg1, shift(@more));
-    while (@more && ($opname eq p_getTokenMeaning($more[0]))) {
+    while (@more && ($opname eq p_getTokenMeaning(realizeXMNode($more[0])))) {
+      ReplacedBy($more[0], $op);
       shift(@more);
       push(@args, shift(@more)); }
     return LeftRec(Apply($op, @args), @more); }
@@ -1021,24 +1109,46 @@ sub LeftRec {
 # then combine as an nary apply of $op to $arg1's arguments and $arg2.
 sub ApplyNary {
   my ($op, $arg1, $arg2) = @_;
-  my $opname    = p_getTokenMeaning($op) || '__undef_meaning__';
-  my $opcontent = p_getValue($op)        || '__undef_content__';
+  my $rop       = realizeXMNode($op);
+  my $opname    = p_getTokenMeaning($rop) || '__undef_meaning__';
+  my $opcontent = p_getValue($rop) || '__undef_content__';
   my @args      = ();
   if (p_getQName($arg1) eq 'ltx:XMApp') {
     my ($op1, @args1) = p_element_nodes($arg1);
-    if (((p_getTokenMeaning($op1) || '__undef_meaning__') eq $opname)    # Same operator?
-      && ((p_getValue($op1) || '__undef_content__') eq $opcontent)
+    my $rop1 = realizeXMNode($op1);
+    if (((p_getTokenMeaning($rop1) || '__undef_meaning__') eq $opname)    # Same operator?
+      && ((p_getValue($rop1) || '__undef_content__') eq $opcontent)
       # Check that ops are used in same way.
-      && !(grep { (p_getAttribute($op, $_) || '<none>') ne (p_getAttribute($op1, $_) || '<none>') }
-        qw(mathstyle))                                                   # Check ops are used in similar way
-          # Check that arg1 isn't wrapped, fenced or enclosed in some restrictive way
-      && !(grep { p_getAttribute($arg1, $_) } qw(open close enclose))) {
+      && !(grep { (p_getAttribute($rop, $_) || '<none>') ne (p_getAttribute($rop1, $_) || '<none>') }
+        qw(mathstyle))    # Check ops are used in similar way
+                          # Check that arg1 isn't wrapped, fenced or enclosed in some restrictive way
+      && !(grep { p_getAttribute(realizeXMNode($arg1), $_) } qw(open close enclose))) {
+      # Note that $op1 GOES AWAY!!!
+      ReplacedBy($op1, $rop);
       push(@args, @args1); }
     else {
       push(@args, $arg1); } }
   else {
     push(@args, $arg1); }
   return Apply($op, @args, $arg2); }
+
+# There are several cases where parsing a formula will rearrange nodes
+# such that some nodes will no-longer be used.  For example, when
+# converting a nested set of infix + into a single n-ary sum.
+# In effect, all those excess +'s are subsumed by the single first one.
+# It may be, however, that those lost nodes are referenced (XMRef) from the
+# other branch of an XMDual, and those references should be updated to refer
+# to the single node replacing the lost ones.
+# This function records that replacement, and the top-level parser fixes up the tree.
+# NOTE: There may be cases (in the Grammar, eg) where punctuation & ApplyOp's
+# get lost completely? Watch out for this!
+sub ReplacedBy {
+  my ($lostnode, $keepnode) = @_;
+  if (my $lostid = p_getAttribute($lostnode, 'xml:id')) {
+    if (my $keepid = p_getAttribute($keepnode, 'xml:id')) {
+      # print STDERR "LOST $lostid use instead $keepid\n";
+      $$LaTeXML::MathParser::LOSTNODES{$lostid} = $keepid; } }
+  return; }
 
 # ================================================================================
 # Construct an appropriate application of sub/superscripts
@@ -1051,12 +1161,14 @@ sub ApplyNary {
 sub NewScript {
   my ($base, $script, $pos) = @_;
   my $role;
-  my ($bx, $bl) = (p_getAttribute($base,   'scriptpos') || 'post') =~ /^(pre|mid|post)?(\d+)?$/;
-  my ($sx, $sl) = (p_getAttribute($script, 'scriptpos') || 'post') =~ /^(pre|mid|post)?(\d+)?$/;
-  my ($mode, $y) = p_getAttribute($script, 'role') =~ /^(FLOAT|POST)?(SUB|SUPER)SCRIPT$/;
+  my $rbase   = realizeXMNode($base);
+  my $rscript = realizeXMNode($script);
+  my ($bx, $bl) = (p_getAttribute($rbase,   'scriptpos') || 'post') =~ /^(pre|mid|post)?(\d+)?$/;
+  my ($sx, $sl) = (p_getAttribute($rscript, 'scriptpos') || 'post') =~ /^(pre|mid|post)?(\d+)?$/;
+  my ($mode, $y) = p_getAttribute($rscript, 'role') =~ /^(FLOAT|POST)?(SUB|SUPER)SCRIPT$/;
   my $x = ($pos ? $pos : ($mode eq 'FLOAT' ? 'pre' : $bx || 'post'));
-  my $lpad = ($x eq 'pre') && p_getAttribute($script, 'lpadding');
-  my $rpad = ($x ne 'pre') && p_getAttribute($script, 'rpadding');
+  my $lpad = ($x eq 'pre') && p_getAttribute($rscript, 'lpadding');
+  my $rpad = ($x ne 'pre') && p_getAttribute($rscript, 'rpadding');
   my $t;
   my $l = $sl || $bl ||
     (($t = $LaTeXML::MathParser::DOCUMENT->getNodeBox($script))
@@ -1064,9 +1176,9 @@ sub NewScript {
   # If the INNER script was a floating script (ie. {}^{x})
   # we'll NOT want this one to stack over it so bump the level.
   my $bumped;
-  if (p_getAttribute($base, '_wasfloat')) {
+  if (p_getAttribute($rbase, '_wasfloat')) {
     $l++; $bumped = 1 }
-  elsif (my $innerl = p_getAttribute($base, '_bumplevel')) {
+  elsif (my $innerl = p_getAttribute($rbase, '_bumplevel')) {
     $l = $innerl; }
   my $app = Apply(New(undef, undef, role => $y . 'SCRIPTOP', scriptpos => "$x$l"),
     $base, Arg($script, 0));
@@ -1109,6 +1221,7 @@ sub IsNotationAllowed {
 # For simplicity in the grammar, we accept a token that has sub|super scripts applied.
 sub MaybeFunction {
   my ($token) = @_;
+  $token = realizeXMNode($token);
   my $self = $LaTeXML::MathParser::PARSER;
   while (p_getQName($token) eq 'ltx:XMApp') {
     $token = Arg($token, 1); }
@@ -1183,6 +1296,11 @@ should represent open and close delimiters and the arguments are
 seperated by punctuation nodes.  The text of these delimiters and
 punctuation are used to annotate the operator node with
 C<argopen>, C<argclose> and C<separator> attributes.
+
+=item C<< $node = InterpretDelimited($op,@stuff); >>
+
+Similar to C<ApplyDelimited>, this interprets sequence of
+delimited, punctuated items as being the application of C<$op> to those items.
 
 =item C<< $node = recApply(@ops,$arg); >>
 

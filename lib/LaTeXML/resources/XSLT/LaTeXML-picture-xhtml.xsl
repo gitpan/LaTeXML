@@ -25,6 +25,8 @@
   <xsl:param name="SVG_NAMESPACE">http://www.w3.org/2000/svg</xsl:param>
   <xsl:param name="USE_SVG">true</xsl:param>
 
+  <xsl:strip-space elements="ltx:picture svg:*"/>
+
   <!-- The namespace to use on SVG elements (typically SVG_NAMESPACE or none) -->
   <xsl:param name="svg_ns">
     <xsl:value-of select="f:if($USE_NAMESPACES,$SVG_NAMESPACE,'')"/>
@@ -87,7 +89,7 @@
   <!-- Top level generated svg:svg element gets id & class from ltx:picture
        If ltx:picture/svg:svg had any of those, they got lost! -->
   <xsl:template match="ltx:picture" mode="as-svg">
-    <xsl:element name="svn" namespace="{$svg_ns}">
+    <xsl:element name="svg" namespace="{$svg_ns}">
       <!-- copy id, class, style from parent ltx:picture -->
       <xsl:call-template name="add_id"/>
       <xsl:call-template name="add_attributes"/>
@@ -97,10 +99,6 @@
       </xsl:for-each>
       <xsl:apply-templates select="svg:svg/*"/>
     </xsl:element>
-  </xsl:template>
-
-  <xsl:template match="ltx:picture" mode="as-svg">
-    <xsl:apply-templates select="svg:svg"/>
   </xsl:template>
 
   <xsl:template match="svg:*">
@@ -136,7 +134,7 @@
       </xsl:for-each>
       <xsl:choose>
         <!-- If foreignObject in a DIFFERENT namespace, copy as foreign markup -->
-        <xsl:when test="local-name()='foreignObject-xml'
+        <xsl:when test="local-name()='foreignObject'
                         and not(namespace-uri(child::*) = $SVG_NAMESPACE)">
           <xsl:apply-templates mode='copy-foreign'/>
         </xsl:when>

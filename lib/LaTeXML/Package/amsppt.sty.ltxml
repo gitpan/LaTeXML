@@ -70,7 +70,7 @@ DefConstructor('\@@@urladdr{}', "<ltx:contact role='url'>#1</ltx:contact>");
 DefMacro('\urladdr Until:\endurladdr', '\@add@to@frontmatter{ltx:creator}{\@@@urladdr{#1}}');
 
 DefMacro('\thanks Until:\endthanks',         '\@add@frontmatter{ltx:note}[role=support]{#1}');
-DefMacro('\date Until:\date',                '\@add@frontmatter{ltx:date}[role=creation]{#1}');
+DefMacro('\date Until:\enddate',             '\@add@frontmatter{ltx:date}[role=creation]{#1}');
 DefMacro('\dedicatory Until:\enddedicatory', '\@add@frontmatter{ltx:note}[role=dedicatory]{#1}');
 DefMacro('\translator Until:\endtranslator', '\@add@frontmatter{ltx:creator}[role=translator]{\@personname{#1}}');
 DefMacro('\keywords Until:\endkeywords',   '\@add@frontmatter{ltx:keywords}{#1}');
@@ -168,7 +168,7 @@ DefMacro('\definitionfont', '\rm');
 DefMacroI('\definitionname', undef, 'Definition');
 DefConstructor('\definition Undigested DigestUntil:\enddefinition',
   "<ltx:theorem class='ltx_theorem_definition' xml:id='#id' refnum='#refnum'>"
-    . "<ltx:title font='#titlefont' _force_font='1'>#title</ltx:title>"
+    . "<ltx:title font='#titlefont' _force_font='true'>#title</ltx:title>"
     . "#2"
     . "</ltx:theorem>",
   properties => sub {
@@ -182,7 +182,7 @@ DefMacro('\remarkfont', '\rm');
 DefMacroI('\remarkname', undef, 'Remark');
 DefConstructor('\remark Undigested DigestUntil:\endremark',
   "<ltx:theorem class='ltx_theorem_remark' xml:id='#id' refnum='#refnum'>"
-    . "<ltx:title font='#titlefont' _force_font='1'>#title</ltx:title>"
+    . "<ltx:title font='#titlefont' _force_font='true'>#title</ltx:title>"
     . "#2"
     . "</ltx:theorem>",
   properties => sub {
@@ -193,7 +193,7 @@ Let('\endremark', '\relax');
 
 DefConstructor('\example Undigested DigestUntil:\endexample',
   "<ltx:theorem class='ltx_theorem_example' xml:id='#id' refnum='#refnum'>"
-    . "<ltx:title font='#titlefont' _force_font='1'>#title</ltx:title>"
+    . "<ltx:title font='#titlefont' _force_font='true'>#title</ltx:title>"
     . "#2"
     . "</ltx:theorem>",
   properties => sub {
@@ -206,7 +206,7 @@ Let('\endexample', '\relax');
 DefMacroI('\demonstrationname', undef, 'Demonstration');
 DefConstructor('\demo Undigested DigestUntil:\enddemo',
   "<ltx:theorem class='ltx_theorem_demonstration' xml:id='#id' refnum='#refnum'>"
-    . "<ltx:title font='#titlefont' _force_font='1'>#title</ltx:title>"
+    . "<ltx:title font='#titlefont' _force_font='true'>#title</ltx:title>"
     . "#2"
     . "</ltx:theorem>",
   properties => sub {
@@ -313,7 +313,7 @@ DefMacro('\the@bibitem', '\number\c@@bibitem');
 ## No that gives too many elements that can be auto-opened!
 ## try the \@auto@Refs bit ... ?
 ##Tag('ltx:bibliography',autoOpen=>1,autoClose=>1);
-
+Tag('ltx:bibliography', autoClose => 1);
 Tag('ltx:biblist', autoOpen => 1, autoClose => 1);
 
 DefRegister('\refindentwd' => Dimension(0));

@@ -21,12 +21,12 @@ RequirePackage('inst_support');
 
 #======================================================================
 # Frontmatter
-DefMacro('\titlerunning', Tokens());
-DefMacro('\titrun',       Tokens());
-DefMacro('\subtitle{}',   '\@add@frontmatter{ltx:subtitle}{#1}');
+DefRegister('\titlerunning', Tokens());
+DefMacro('\titrun',     Tokens());
+DefMacro('\subtitle{}', '\@add@frontmatter{ltx:subtitle}{#1}');
 
-DefMacro('\authorrunning', Tokens());
-DefMacro('\authrun',       Tokens());
+DefRegister('\authorrunning', Tokens());
+DefMacro('\authrun', Tokens());
 
 DefMacro('\emailname', 'E-mail');
 DefConstructor('\@@@email{}', "^ <ltx:contact role='email' name='#name'>#1</ltx:contact>",
@@ -151,7 +151,7 @@ DefMacro('\spnewtheorem OptionalMatch:* {}[]{}[] {}{}', sub {
 # Swap causes you to get the odd (to me) order "4.1 Lemma", which breaks our new localization methods!!!
     DefEnvironment("{$thmset} OptionalUndigested",
       "<ltx:theorem xml:id='#id' refnum='#refnum' class='#class'>"
-        . "<ltx:title font='#titlefont' _force_font='1'>#title</ltx:title>"
+        . "<ltx:title font='#titlefont' _force_font='true'>#title</ltx:title>"
         . "#body"
         . "</ltx:theorem>",
       beforeDigest => sub {

@@ -29,6 +29,7 @@ use LaTeXML::Package;
 # Since amstex uses \documentstyle, we _must_ define it here to
 # keep TeX.pool from anticipating LaTeX mode and loading LaTeX.pool!
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+RequireResource('ltx-amsart.css');    # hopefully close enough...
 
 DefConstructorI('\AmSTeX', undef, 'AMSTeX');
 DefMacro('\fmtname',    'AmS-TeX');
@@ -38,18 +39,16 @@ Let('\plainfmtversion', '\fmtversion');
 DefPrimitive('\define SkipSpaces Token UntilBrace {}', sub {
     my ($stomach, $cs, $params, $body) = @_;
     $params = parseDefParameters($cs, $params);    # in TeX.pool
-    my $key = "defined:" . Stringify($cs);
-    Error('ignore', $cs, $stomach,
-      "Ignoring redefinition (\\define) of '" . Stringify($cs) . "'") if LookupValue($key);
-    AssignValue($key => 1);    # only if defined by \define (or \newcommand!)??? Or ANY \def ???
+    if (LookupDefinition($cs)) {
+      Info('ignore', $cs, $stomach,
+        "Ignoring redefinition (\\define) of '" . Stringify($cs) . "'");
+      return; }
     DefMacroI($cs, $params, $body);
     return; });
 
 DefPrimitive('\redefine SkipSpaces Token UntilBrace {}', sub {
     my ($stomach, $cs, $params, $body) = @_;
     $params = parseDefParameters($cs, $params);    # in TeX.pool
-    my $key = "defined:" . Stringify($cs);
-    AssignValue($key => 1);    # only if defined by \define (or \newcommand!), not \def!
     DefMacroI($cs, $params, $body);
     return; });
 
@@ -58,9 +57,7 @@ DefPrimitive('\predefine Token Token', sub {
 
 DefPrimitive('\undefine Token', sub {
     my ($stomach, $cs) = @_;
-    my $key = "defined:" . Stringify($cs);
-    AssignValue($key => 0);
-    Let($_[1], '\undefined'); });
+    Let($_[1], '\relax'); });
 
 #======================================================================
 # Style choices
@@ -165,7 +162,7 @@ DefMacro('\newline', "\n");
 DefPrimitiveI('\textfonti', undef, '',
   font => { family => 'serif', series => 'medium', shape => 'upright' });
 DefPrimitiveI('\textfontii', undef, '',
-  font => { family => 'serif', series => 'medium', shape => 'upright', size => 'small' });
+  font => { family => 'serif', series => 'medium', shape => 'upright', size => 9 });
 
 DefConstructor('\spreadlines Dimension', '');
 
@@ -221,7 +218,7 @@ Let('\dsize',  '\displaystyle');
 Let('\tsize',  '\textstyle');
 Let('\ssize',  '\scriptstyle');
 Let('\sssize', '\scriptscriptstyle');
-
+Let('\tag',    '\eqno');
 DefMath('\and', '\&', role => 'ADDOP', meaning => 'and');
 DefConstructor("\\\\",
   "?#isMath(<ltx:XMHint name='newline'/>)(<ltx:break/>)",
@@ -346,30 +343,22 @@ DefMacro('\accentedsymbol{}{}', '\def#1{#2}');
 
 # Tricky:
 #  \cfrac, \lcfrac, \endcfrac
-DefRegister('\cfraccount@' => Number(0));
-DefPrimitive('\@cfracstyle{}', sub { AssignValue(CFRACSTYLE => ToString($_[1])); });
-DefMacro('\cfrac',  '\bgroup\@cfracstyle{c}\advance\cfraccount@ 1\let\\\@cfrac');
-DefMacro('\lcfrac', '\bgroup\@cfracstyle{l}\advance\cfraccount@ 1\let\\\@cfrac');
-DefMacro('\rcfrac', '\bgroup\@cfracstyle{r}\advance\cfraccount@ 1\let\\\@cfrac');
+DefConstructor('\cfrac', '',
+  afterDigest => sub {
+    my ($stomach) = @_;
+    $stomach->bgroup;
+    Let(T_CS("\\\\"), T_CS('\lx@cfrac')); });
+DefConstructor('\endcfrac', '',
+  afterDigest => sub {
+    my ($stomach) = @_;
+    $stomach->egroup; });
 
-DefConstructorI('\@cfrac', undef,
-  "<ltx:XMApp>"
-    . "<ltx:XMTok meaning='continued-fraction' mathstyle='#mathstyle' role='MULOP'/>"
-    . "<ltx:XMArg>#top</ltx:XMArg>"
-    . "<ltx:XMArg>#bottom</ltx:XMArg>"
-    . "</ltx:XMApp>",
-  afterDigest => \&chooseArgHandler,
-  properties  => sub { (mathstyle => LookupValue('CFRACSTYLE')); },
-  reversion   => sub {
-    my ($whatsit) = @_;
-    (T_CS('\cfrac'),
-      Revert($whatsit->getProperty('top')),
-      T_CS("\\\\"),
-      Revert($whatsit->getProperty('bottom'))); });
+# These really need a way to pass denomalign=left|right to the MathML!
+Let('\lcfrac', '\cfrac');
+Let('\rcfrac', '\cfrac');
 
-DefMacro('\endcfrac', sub {
-    ((map { T_CS('\egroup') } 1 .. LookupValue('\cfraccount@')->valueOf), T_CS('\@endcfrac')); });
-DefConstructor('\@endcfrac', '', reversion => '\endcfrac');
+DefMacro('\lx@cfrac',
+  '\lx@generalized@over{\\\\}{meaning=continued-fraction,role=MULOP}\displaystyle');
 
 #======================================================================
 # Bibliography

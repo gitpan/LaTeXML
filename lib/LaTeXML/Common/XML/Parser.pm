@@ -17,14 +17,13 @@ use XML::LibXML;
 sub new {
   my ($class) = @_;
   my $parser = XML::LibXML->new();
-###  $parser->clean_namespaces(1);
   $parser->validation(0);
-  $parser->keep_blanks(0);    # This allows formatting the output.
   return bless { parser => $parser }, $class; }
 
 sub parseFile {
   my ($self, $file) = @_;
   LaTeXML::Common::XML::initialize_catalogs();
+  #  LaTeXML::Common::XML::initialize_input_callbacks($$self{parser});
   return $$self{parser}->parse_file($file); }
 
 sub parseString {

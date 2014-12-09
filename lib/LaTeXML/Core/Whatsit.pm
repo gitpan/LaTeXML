@@ -106,8 +106,7 @@ sub getBody {
 sub setBody {
   my ($self, @body) = @_;
   my $trailer = pop(@body);
-##  $$self{properties}{body} = List(@body, mode => $self->isMath ? 'math' : 'text');
-  $$self{properties}{body} = LaTeXML::Core::List->new(@body);    # Don't want collapse if singlet!
+  $$self{properties}{body} = List(@body);
   $$self{properties}{body}->setProperty(mode => 'math') if $self->isMath;
   $$self{properties}{trailer} = $trailer;
   # And copy any otherwise undefined properties from the trailer
@@ -129,14 +128,17 @@ sub unlist {
 sub revert {
   my ($self) = @_;
   # WARNING: Forbidden knowledge?
-  # But how else to cache this stuff (which is a big performance boost)
-  if (my $saved = ($LaTeXML::DUAL_BRANCH
+  # (1) provide a means to get the RAW, internal markup that can (hopefully) be RE-digested
+  #     this is needed for getting the numerator of \over into textstyle!
+  # (2) caching the reversion (which is a big performance boost)
+  if (my $saved = !$LaTeXML::REVERT_RAW
+    && ($LaTeXML::DUAL_BRANCH
       ? $$self{dual_reversion}{$LaTeXML::DUAL_BRANCH}
       : $$self{reversion})) {
     return $saved->unlist; }
   else {
     my $defn   = $self->getDefinition;
-    my $spec   = $defn->getReversionSpec;
+    my $spec   = ($LaTeXML::REVERT_RAW ? undef : $defn->getReversionSpec);
     my @tokens = ();
     if ((defined $spec) && (ref $spec eq 'CODE')) {    # If handled by CODE, call it
       @tokens = &$spec($self, $self->getArgs); }
@@ -145,7 +147,7 @@ sub revert {
         @tokens = LaTeXML::Core::Definition::Expandable::substituteTokens($spec, map { Tokens(Revert($_)) } $self->getArgs)
           if $spec ne ''; }
       else {
-        my $alias = $defn->getAlias;
+        my $alias = ($LaTeXML::REVERT_RAW ? undef : $defn->getAlias);
         if (defined $alias) {
           push(@tokens, T_CS($alias)) if $alias ne ''; }
         else {
@@ -157,7 +159,8 @@ sub revert {
         if (defined(my $trailer = $self->getTrailer)) {
           push(@tokens, Revert($trailer)); } } }
     # Now cache it, in case it's needed again
-    if ($LaTeXML::DUAL_BRANCH) {
+    if ($LaTeXML::REVERT_RAW) { }    # don't cache
+    elsif ($LaTeXML::DUAL_BRANCH) {
       $$self{dual_reversion}{$LaTeXML::DUAL_BRANCH} = Tokens(@tokens); }
     else {
       $$self{reversion} = Tokens(@tokens); }
@@ -209,8 +212,9 @@ sub computeSize {
   my ($self, %options) = @_;
   # Use #body, if any, else ALL args !?!?!
   # Eventually, possibly options like sizeFrom, or computeSize or....
+  my $defn  = $self->getDefinition;
   my $props = $self->getPropertiesRef;
-  my $sizer = $$props{sizer};
+  my $sizer = $defn->getSizer;
   my ($width, $height, $depth);
   # If sizer is a function, call it
   if (ref $sizer) {
@@ -221,11 +225,11 @@ sub computeSize {
       @boxes = ($$self{properties}{body}
         ? ($$self{properties}{body})
         : (map { ((ref $_) && ($_->isaBox) ? $_->unlist : ()) } @{ $$self{args} })); }
-    elsif ($sizer eq '0') { }    # 0 size!
-    elsif ($sizer =~ /^#(\d+)$/) {    # Else if of form '#digit', derive size from that argument
-      push(@boxes, $self->getArg($1)); }
-    elsif ($sizer =~ /^#(\w+)$/) {    # Or if of form '#word', derivce size from that property (a box?)
-      push(@boxes, $$self{properties}{$1}); }
+    elsif (($sizer eq '0') || ($sizer eq '')) { }    # 0 size!
+    elsif ($sizer =~ /^(#\w+)*$/) {    # Else if of form '#digit' or '#prop', combine sizes
+      while ($sizer =~ s/^#(\w+)//) {
+        my $arg = $1;
+        push(@boxes, ($arg =~ /^\d+$/ ? $self->getArg($arg) : $$props{$arg})); } }
     else {
       Warn('unexpected', $sizer, undef,
         "Expected sizer to be a function, or arg or property specification, not '$sizer'"); }

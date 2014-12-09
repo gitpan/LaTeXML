@@ -40,7 +40,7 @@ extra_Tests();
 WriteMakefile(NAME => 'LaTeXML',
   AUTHOR             => 'Bruce Miller <bruce.miller@nist.gov>',
   ABSTRACT           => "transforms TeX and LaTeX into XML/HTML/MathML",
-  VERSION_FROM       => 'lib/LaTeXML/Version.in',
+  VERSION_FROM       => 'lib/LaTeXML.pm',
   MIN_PERL_VERSION   => 5.008001,
   # A very restricted set of licenses are allowed here. No Creative Commons, eg.!
   # The tag open_source should be an Open Source Initiative approved license;
@@ -61,6 +61,7 @@ WriteMakefile(NAME => 'LaTeXML',
     'Parse::RecDescent' => 0,
     'Pod::Parser'       => 0,   # for Pod::Find
     'Test::More'        => 0,
+    'Time::HiRes'       => 0,
     'URI'               => 0,
     # If we have an "old" version of XML::LibXML,
     # we also need XPathContext.

@@ -33,6 +33,8 @@
     <xsl:value-of select="f:if($USE_NAMESPACES,$MathML_NAMESPACE,'')"/>
   </xsl:param>
 
+  <xsl:strip-space elements="ltx:Math"/>
+
   <xsl:template match="ltx:Math">
     <xsl:choose>
       <!-- Prefer MathML, if allowed -->
@@ -127,6 +129,14 @@
                         and not(namespace-uri(child::*) = $MathML_NAMESPACE)">
           <xsl:apply-templates mode='copy-foreign'/>
         </xsl:when>
+        <!-- mtext processes content in the model of the containing document -->
+        <xsl:when test="local-name()='mtext'
+                        and namespace-uri() = $MathML_NAMESPACE">
+          <xsl:apply-templates>
+            <xsl:with-param name="context" select="'inline'"/>
+          </xsl:apply-templates>
+        </xsl:when>
+        <!-- otherwise, process more mathml -->
         <xsl:otherwise>
           <xsl:apply-templates/>
         </xsl:otherwise>

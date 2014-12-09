@@ -89,11 +89,14 @@ sub getopt_specification {
     #   or, in fact, _other_ parallel means? (om?, omdoc? ...)
     # So, need to separate multiple transformations from the combination.
     # However, IF combining, then will need to support a id/ref mechanism.
-    "mathimages!"                 => \$$opts{mathimages},
     "mathimagemagnification=f"    => \$$opts{mathimagemag},
     "linelength=i"                => \$$opts{linelength},
     "plane1!"                     => \$$opts{plane1},
     "hackplane1!"                 => \$$opts{hackplane1},
+    "mathimages"                  => sub { _addMathFormat($opts, 'images'); },
+    "nomathimages"                => sub { _removeMathFormat($opts, 'images'); },
+    "mathsvg"                     => sub { _addMathFormat($opts, 'svg'); },
+    "nomathsvg"                   => sub { _removeMathFormat($opts, 'svg'); },
     "presentationmathml|pmml"     => sub { _addMathFormat($opts, 'pmml'); },
     "contentmathml|cmml"          => sub { _addMathFormat($opts, 'cmml'); },
     "openmath|om"                 => sub { _addMathFormat($opts, 'om'); },
@@ -171,17 +174,22 @@ sub getopt_specification {
 our @GETOPT_KEYS = keys %{ (getopt_specification())[0] };
 
 sub read {
-  my ($self, $argref) = @_;
+  my ($self, $argref, %read_options) = @_;
   my $opts = $$self{opts};
   local @ARGV = @$argref;
   my ($spec) = getopt_specification(options => $opts);
-  GetOptions(%{$spec}) or pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
-    -input => pod_where({ -inc => 1 }, __PACKAGE__),
-    -sections => 'OPTIONS/SYNOPSIS', -output => \*STDERR);
-
-  pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
-    -input => pod_where({ -inc => 1 }, __PACKAGE__),
-    -sections => 'OPTIONS/SYNOPSIS', output => \*STDOUT) if $$opts{help};
+  my $silent = %read_options && $read_options{silent};
+  my $getOptions_success = GetOptions(%{$spec});
+  if (!$getOptions_success && !$silent) {
+    pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
+      -input => pod_where({ -inc => 1 }, __PACKAGE__),
+      -sections => 'OPTIONS/SYNOPSIS', -output => \*STDERR);
+  }
+  if (!$silent && $$opts{help}) {
+    pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
+      -input => pod_where({ -inc => 1 }, __PACKAGE__),
+      -sections => 'OPTIONS/SYNOPSIS', output => \*STDOUT);
+  }
 
   # Check that destination is valid before wasting any time...
   if ($$opts{destination}) {
@@ -194,17 +202,19 @@ sub read {
   if ($$opts{showversion}) { print STDERR "$LaTeXML::IDENTITY\n"; exit(1); }
 
   $$opts{source} = $ARGV[0] unless $$opts{source};
+  # Special source-based guessing needs to happen here,
+  #   as we won't have access to the source file/literal/resource later on:
   if (!$$opts{type} || ($$opts{type} eq 'auto')) {
     $$opts{type} = 'BibTeX' if ($$opts{source} && ($$opts{source} =~ /$is_bibtex/)); }
   if (!$$opts{whatsin}) {
     $$opts{whatsin} = 'archive' if ($$opts{source} && ($$opts{source} =~ /$is_archive/)); }
-  return;
+  return $getOptions_success;
 }
 
 sub read_keyvals {
-  my ($self, $opts) = @_;
+  my ($self, $conversion_options, %read_options) = @_;
   my $cmdopts = [];
-  while (my ($key, $value) = splice(@$opts, 0, 2)) {
+  while (my ($key, $value) = splice(@$conversion_options, 0, 2)) {
     # TODO: Is skipping over empty values ever harmful? Do we have non-empty defaults anywhere?
     next if (!length($value)) && (grep { /^$key\=/ } @GETOPT_KEYS);
     $key = "--$key" unless $key =~ /^\-\-/;
@@ -212,17 +222,21 @@ sub read_keyvals {
     CORE::push @$cmdopts, "$key$value";
   }
   # Read into a Config object:
-  return $self->read($cmdopts); }
+  return $self->read($cmdopts, %read_options); }
 
 sub scan_to_keyvals {
-  my ($self, $argref) = @_;
+  my ($self, $argref, %read_options) = @_;
   local @ARGV = @$argref;
   my ($spec, $keyvals) = getopt_specification(type => 'keyvals');
-  GetOptions(%$spec) or pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
-    -input => pod_where({ -inc => 1 }, __PACKAGE__),
-    -sections => 'OPTIONS/SYNOPSIS', -output => \*STDERR);
+  my $silent = %read_options && $read_options{silent};
+  my $getOptions_success = GetOptions(%$spec);
+  if (!$getOptions_success && !$silent) {
+    pod2usage(-message => $LaTeXML::IDENTITY, -exitval => 1, -verbose => 99,
+      -input => pod_where({ -inc => 1 }, __PACKAGE__),
+      -sections => 'OPTIONS/SYNOPSIS', -output => \*STDERR);
+  }
   CORE::push @$keyvals, ['source', $ARGV[0]] if $ARGV[0];
-  return $keyvals;
+  return $getOptions_success && $keyvals;
 }
 
 ###########################################
@@ -287,6 +301,7 @@ sub _obey_profile {
   $$self{dirty} = 1;
   my $opts = $$self{opts};
   my $profile = lc($$opts{profile} || 'custom');
+  $profile =~ s/\.opt$//;
   # Look at the PROFILES_DB or find a profiles file (otherwise fallback to custom)
   my $profile_opts = {};
   if ($profile ne 'custom') {
@@ -353,7 +368,7 @@ sub _prepare_options {
   if ($$opts{mathparse} eq 'no') {
     $$opts{mathparse}   = 0;
     $$opts{nomathparse} = 1; }    #Backwards compatible
-  $$opts{verbosity} = 10    unless defined $$opts{verbosity};
+  $$opts{verbosity} = 0     unless defined $$opts{verbosity};
   $$opts{preload}   = []    unless defined $$opts{preload};
   $$opts{paths}     = ['.'] unless defined $$opts{paths};
   @{ $$opts{paths} } = map { pathname_canonical($_) } @{ $$opts{paths} };
@@ -361,7 +376,12 @@ sub _prepare_options {
     $$opts{$_} = pathname_canonical($$opts{$_}) if defined $$opts{$_};
   }
 
-  $$opts{whatsin}  = 'document' unless defined $$opts{whatsin};
+  if (!defined $$opts{whatsin}) {
+    if ($$opts{preamble} || $$opts{postamble}) {
+      # Preamble or postamble imply a fragment whatsin
+      $$opts{whatsin} = 'fragment'; }
+    else {    # Default input chunk is a document
+      $$opts{whatsin} = 'document'; } }
   $$opts{whatsout} = 'document' unless defined $$opts{whatsout};
   $$opts{type}     = 'auto'     unless defined $$opts{type};
   unshift(@{ $$opts{preload} }, ('TeX.pool', 'LaTeX.pool', 'BibTeX.pool')) if ($$opts{type} eq 'BibTeX');
@@ -440,17 +460,19 @@ sub _prepare_options {
     if ((defined $$opts{destination}) || ($$opts{whatsout} =~ /^archive/)) {
       # We want the graphics enabled by default, but only when we have a destination
       $$opts{dographics} = 1 unless defined $$opts{dographics};
-      $$opts{picimages}  = 1 unless defined $$opts{picimages}; }
+      $$opts{picimages} = 1 if ($$opts{format} eq "html4") && !defined $$opts{picimages};
+    }
     # Split sanity:
     if ($$opts{split}) {
       $$opts{splitat}     = 'section' unless defined $$opts{splitat};
       $$opts{splitnaming} = 'id'      unless defined $$opts{splitnaming};
       $$opts{splitback} = "//ltx:bibliography | //ltx:appendix | //ltx:index" unless defined $$opts{splitback};
-      $$opts{splitpaths} =
-        { chapter => "//ltx:chapter | " . $$opts{splitback},
-        section    => "//ltx:chapter | //ltx:section | " . $$opts{splitback},
-        subsection => "//ltx:chapter | //ltx:section | //ltx:subsection | " . $$opts{splitback},
-        subsubsection => "//ltx:chapter | //ltx:section | //ltx:subsection | //ltx:subsubsection | " . $$opts{splitback} }
+      $$opts{splitpaths} = {
+        part    => "//ltx:part | " . $$opts{splitback},
+        chapter => "//ltx:part | //ltx:chapter | " . $$opts{splitback},
+        section => "//ltx:part | //ltx:chapter | //ltx:section | " . $$opts{splitback},
+        subsection => "//ltx:part | //ltx:chapter | //ltx:section | //ltx:subsection | " . $$opts{splitback},
+        subsubsection => "//ltx:part | //ltx:chapter | //ltx:section | //ltx:subsection | //ltx:subsubsection | " . $$opts{splitback} }
         unless defined $$opts{splitpaths};
 
       $$opts{splitnaming} = _checkOptionValue('--splitnaming', $$opts{splitnaming},
@@ -475,9 +497,11 @@ sub _prepare_options {
       croak("Cannot generate index (--index) without --scan or --dbfile"); }
     if (!$$opts{prescan} && @{ $$opts{bibliographies} } && !($$opts{scan} || defined $$opts{crossref})) {
       croak("Cannot generate bibliography (--bibliography) without --scan or --dbfile"); }
-    if ((!defined $$opts{destination}) && ($$opts{whatsout} !~ /^archive/) && ($$opts{mathimages} || $$opts{dographics} || $$opts{picimages})) {
+    if ((!defined $$opts{destination}) && ($$opts{whatsout} !~ /^archive/)
+      && (_checkMathFormat($opts, 'images') || _checkMathFormat($opts, 'svg')
+        || $$opts{dographics} || $$opts{picimages})) {
       croak("Must supply --destination unless all auxilliary file writing is disabled"
-          . "(--nomathimages --nographicimages --nopictureimages --nodefaultcss)"); }
+          . "(--nomathimages --nomathsvg --nographicimages --nopictureimages --nodefaultcss)"); }
 
     # Format:
     #Default is XHTML, XML otherwise (TODO: Expand)
@@ -495,16 +519,16 @@ sub _prepare_options {
     if ($$opts{format} eq 'html4') {
       $$opts{svg} = 0 unless defined $$opts{svg};    # No SVG by default in HTML.
       croak("Default html4 stylesheet only supports math images, not " . join(', ', @{ $$opts{math_formats} }))
-        if scalar(@{ $$opts{math_formats} });
+        if (!defined $$opts{stylesheet})
+        && scalar(grep { $_ ne 'images' } @{ $$opts{math_formats} });
       croak("Default html stylesheet does not support svg") if $$opts{svg};
-      $$opts{mathimages}   = 1;
       $$opts{math_formats} = [];
+      _maybeAddMathFormat($opts, 'images');
     }
     $$opts{svg} = 1 unless defined $$opts{svg};      # If we're not making HTML, SVG is on by default
           # PMML default if we're HTMLy and all else fails and no mathimages:
-    if (((!defined $$opts{math_formats}) || (!scalar(@{ $$opts{math_formats} }))) &&
-      (!$$opts{mathimages}) && ($$opts{is_html} || $$opts{is_xhtml}))
-    {
+    if (((!defined $$opts{math_formats}) || (!scalar(@{ $$opts{math_formats} })))
+      && ($$opts{is_html} || $$opts{is_xhtml})) {
       CORE::push @{ $$opts{math_formats} }, 'pmml';
     }
     # use parallel markup if there are multiple formats requested.
@@ -530,6 +554,16 @@ sub _removeMathFormat {
   $$opts{removed_math_formats}->{$fmt} = 1;
   return; }
 
+sub _maybeAddMathFormat {
+  my ($opts, $fmt) = @_;
+  unshift(@{ $$opts{math_formats} }, $fmt)
+    unless (grep { $_ eq $fmt } @{ $$opts{math_formats} }) || $$opts{removed_math_formats}{$fmt};
+  return; }
+
+sub _checkMathFormat {
+  my ($opts, $fmt) = @_;
+  return grep { $_ eq $fmt } @{ $$opts{math_formats} }; }
+
 sub _checkOptionValue {
   my ($option, $value, @choices) = @_;
   if ($value) {
@@ -542,6 +576,7 @@ sub _read_options_file {
   my ($file) = @_;
   my $opts = [];
   my $OPT;
+  print STDERR "(Loading profile $file...";
   unless (open($OPT, "<", $file)) {
     Error('expected', $file, "Could not open options file '$file'");
     return; }
@@ -582,6 +617,7 @@ sub _read_options_file {
         "Unrecognized configuration data '$line'"); }
   }
   close $OPT;
+  print STDERR " )\n";
   return $opts; }
 
 1;
@@ -956,6 +992,10 @@ Requests an embeddable XHTML div (requires: --post --format=xhtml),
 
 Requests or disables the conversion of math to images.
 Conversion is the default for html4 format.
+
+=item C<--mathsvg>, C<--nomathsvg>
+
+Requests or disables the conversion of math to svg images.
 
 =item C<--mathimagemagnification=>I<factor>
 

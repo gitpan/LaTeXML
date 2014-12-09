@@ -71,7 +71,8 @@ equation_attributes =
   Backgroundable.attributes
 
 ## Content model for \elementref{equation}.
-equation_model = (Math | MathFork  | \text | Misc.class | Meta.class | EquationMeta.class)* 
+equation_model =
+  tag?, (Math | MathFork  | \text | Misc.class | Meta.class | EquationMeta.class)* 
 
 #======================================================================
 
@@ -165,7 +166,9 @@ element listingblock { listingblock_attributes, listingblock_model }
 listingblock_attributes =
   Common.attributes,
   Labelled.attributes,
-  Backgroundable.attributes
+  Backgroundable.attributes,
+  ## raw data related to the listing; presumably the unformatted listing
+  attribute data { text }?
 
 ## Content model for \elementref{listingblock}.
 listingblock_model = Block.model*

@@ -111,7 +111,7 @@ sub UnTeX {
   my @tokens = (ref $thing ? $thing->revert : Explode($thing));
   my $string = '';
   my $length = 0;
-  #  my $level = 0;
+  my $level  = 0;
   my ($prevs, $prevcc) = ('', CC_COMMENT);
   while (@tokens) {
     my $token = shift(@tokens);
@@ -122,7 +122,7 @@ sub UnTeX {
       while (@tokens && ($tokens[0]->getCatcode == CC_LETTER)) {
         $s .= shift(@tokens)->getString; } }
     my $l = length($s);
-    #    if($cc == CC_BEGIN){ $level++; }
+    if ($cc == CC_BEGIN) { $level++; }
     # Seems a reasonable & safe time to line break, for readability, etc.
     if (($cc == CC_SPACE) && ($s eq "\n")) {    # preserve newlines already present
       if ($length > 0) {
@@ -142,46 +142,49 @@ sub UnTeX {
       $string .= "%\n" . $s; $length = $l; }                      # with %, so that it "disappears"
     else {
       $string .= $s; $length += $l; }
-    #    if($cc == CC_END  ){ $level--; }
+    if ($cc == CC_END) { $level--; }
     $prevs = $s; $prevcc = $cc; }
+  # Patch up nesting for valid TeX !!!
+  if ($level > 0) { $string = $string . ('}' x $level); }
+  elsif ($level < 0) { $string = ('{' x -$level) . $string; }
   return $string; }
 
 #======================================================================
 # Categories of Category codes.
 # For Tokens with these catcodes, only the catcode is relevant for comparison.
 # (if they even make it to a stage where they get compared)
-my @primitive_catcode = (    # [CONSTANT]
+our @primitive_catcode = (    # [CONSTANT]
   1, 1, 1, 1,
   1, 1, 1, 1,
   1, 0, 1, 0,
   0, 0, 0, 0,
   0, 1);
-my @executable_catcode = (    # [CONSTANT]
+our @executable_catcode = (    # [CONSTANT]
   0, 1, 1, 1,
   1, 0, 0, 1,
   1, 0, 0, 0,
   0, 1, 0, 0,
   1, 0);
 
-my @standardchar = (          # [CONSTANT]
+our @standardchar = (          # [CONSTANT]
   "\\",  '{',   '}',   q{$},
   q{&},  "\n",  q{#},  q{^},
   q{_},  undef, undef, undef,
   undef, undef, q{%},  undef);
 
-my @CC_NAME =                 #[CONSTANT]
+our @CC_NAME =                 #[CONSTANT]
   qw(Escape Begin End Math
   Align EOL Parameter Superscript
   Subscript Ignore Space Letter
   Other Active Comment Invalid
   ControlSequence NotExpanded);
-my @PRIMITIVE_NAME = (        # [CONSTANT]
+our @PRIMITIVE_NAME = (        # [CONSTANT]
   'Escape',    'Begin', 'End',       'Math',
   'Align',     'EOL',   'Parameter', 'Superscript',
   'Subscript', undef,   'Space',     undef,
   undef,       undef,   undef,       undef,
   undef,       'NotExpanded');
-my @CC_SHORT_NAME =           #[CONSTANT]
+our @CC_SHORT_NAME =           #[CONSTANT]
   qw(T_ESCAPE T_BEGIN T_END T_MATH
   T_ALIGN T_EOL T_PARAM T_SUPER
   T_SUB T_IGNORE T_SPACE T_LETTER
@@ -234,11 +237,14 @@ my @NEUTRALIZABLE = (    # [CONSTANT]
   0, 0, 0, 1,
   1, 0, 1, 1,
   1, 0, 0, 0,
-  0, 1, 1, 0,
+  0, 1, 0, 0,
   0, 0);
 
 # neutralize really should only retroactively imitate what Semiverbatim would have done.
 # So, it needs to neutralize those in SPECIALS
+# NOTE that although '%' gets it's catcode changed in Semiverbatim,
+# I'm pretty sure we do NOT want to neutralize comments (turn them into CC_OTHER)
+# here, since if comments do get into the Tokens, that will introduce weird crap into the stream.
 sub neutralize {
   my ($self) = @_;
   my ($ch, $cc) = @$self;
