@@ -34,4 +34,4 @@ requires:
   XML::LibXML: 1.61
   XML::LibXSLT: 1.58
   perl: 5.008001
-version: v0.8.0_1
+version: v0.8.0_2
